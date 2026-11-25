@@ -21,7 +21,7 @@ class ExtractionTests(unittest.TestCase):
     def test_hoodie_material_requires_qa(self):
         r = engine.extract('Fishing Shirt', 'Material: polyester', 'Hoodie')
         self.assertEqual(r['proposed_material'], 'Polyester')
-        self.assertIn('material_requires_variant_style_confirmation', r['review_reason'])
+        self.assertIn('material_variant_unverified', r['review_reason'])
     def test_flags_not_pattern(self):
         self.assertEqual(engine.extract('American Flag Striped Shirt', '')['proposed_pattern'], '')
     def test_option_color(self):
@@ -98,3 +98,53 @@ class ExtractionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class V13Tests(unittest.TestCase):
+    def test_title_suffix_color(self):
+        result=engine.extract('Golf Polo | Red NQS7157','')
+        self.assertEqual(result['proposed_color'],'Red')
+    def test_title_verified_attribute_not_material(self):
+        row={'offerId':'shopify_US_1_2','_shopify_status':'SHOPIFY_VERIFIED',
+             '_shopify_product_id':'1','_shopify_variant_id':'2',
+             '_shopify_title':'Navy Blue Red Geometric Dart Shirt',
+             '_variant_style':'Hoodie','productAttributes':{'title':'Navy Blue Red Geometric Dart Shirt',
+             'description':'Material: Polyester','color':'One color'}}
+        with tempfile.TemporaryDirectory() as directory:
+            reporter=engine.Reporter(directory)
+            reporter.process(row)
+            reporter.close()
+            with (Path(directory)/'approved_attributes.csv').open(encoding='utf-8-sig') as fh:
+                data=list(csv.DictReader(fh))
+            self.assertEqual(len(data),1)
+            self.assertEqual(data[0]['approved_color'],'Navy Blue/Red')
+            self.assertEqual(data[0]['approved_pattern'],'Geometric')
+            self.assertEqual(data[0]['approved_material'],'')
+            self.assertEqual(data[0]['material_qa'],'MATERIAL_NEEDS_REVIEW')
+    @patch('live.shopify_descriptions')
+    @patch('live.merchant_page')
+    def test_inter_run_resume_and_no_duplicates(self, pages, descriptions):
+        def enrich(items):
+            for row in items:
+                row['_shopify_status']='SHOPIFY_VERIFIED'
+                row['_shopify_title']=row['productAttributes']['title']
+        descriptions.side_effect=enrich
+        one={'offerId':'shopify_US_1_10','productAttributes':{'title':'Red Camo Polo','color':'One color'}}
+        two={'offerId':'shopify_US_1_11','productAttributes':{'title':'Blue Plaid Polo','color':'One color'}}
+        pages.side_effect=[([one],'tok'),([one,two],'')]
+        from argparse import Namespace
+        with tempfile.TemporaryDirectory() as directory, patch.dict('os.environ',{'GMC_ACCOUNT_ID':'123'}):
+            first=engine.run_live(Namespace(out=directory,resume=False,page_size=500,max_pages=1))
+            self.assertEqual(first['scanned'],1)
+            self.assertFalse(first['completed'])
+            second=engine.run_live(Namespace(out=directory,resume=True,page_size=500,max_pages=1))
+            self.assertEqual(second['scanned'],2)
+            self.assertEqual(second['approved_color'],2)
+            self.assertTrue(second['completed'])
+            self.assertEqual(pages.call_args_list[1].args[0],'tok')
+            with (Path(directory)/'audit.csv').open(encoding='utf-8-sig') as fh:
+                self.assertEqual(len(list(csv.DictReader(fh))),2)
+    def test_no_checkpoint_resume_fails(self):
+        from argparse import Namespace
+        with tempfile.TemporaryDirectory() as directory, patch.dict('os.environ',{'GMC_ACCOUNT_ID':'123'}):
+            with self.assertRaisesRegex(ValueError,'checkpoint'):
+                engine.run_live(Namespace(out=directory,resume=True,page_size=500,max_pages=1))

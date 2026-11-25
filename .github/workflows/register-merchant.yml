@@ -1,0 +1,68 @@
+
+name: Register Google Merchant API
+
+on:
+  workflow_dispatch:
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install dependencies
+        run: pip install google-auth requests
+
+      - name: Register GCP project with GMC
+        env:
+          MERCHANT_SERVICE_ACCOUNT_JSON: ${{ secrets.MERCHANT_SERVICE_ACCOUNT_JSON }}
+          GMC_ACCOUNT_ID: ${{ secrets.GMC_ACCOUNT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          import json
+          import requests
+          from google.oauth2 import service_account
+          from google.auth.transport.requests import Request
+
+          info = json.loads(
+              os.environ["MERCHANT_SERVICE_ACCOUNT_JSON"]
+          )
+
+          credentials = service_account.Credentials.from_service_account_info(
+              info,
+              scopes=["https://www.googleapis.com/auth/content"]
+          )
+          credentials.refresh(Request())
+
+          account = os.environ["GMC_ACCOUNT_ID"].strip()
+          url = (
+              "https://merchantapi.googleapis.com/"
+              f"accounts/v1/accounts/{account}/"
+              "developerRegistration:registerGcp"
+          )
+
+          response = requests.post(
+              url,
+              headers={
+                  "Authorization": f"Bearer {credentials.token}",
+                  "Content-Type": "application/json"
+              },
+              json={},
+              timeout=60
+          )
+
+          if not response.ok:
+              try:
+                  error = response.json().get("error", {})
+                  print("HTTP status:", response.status_code)
+                  print("Error status:", error.get("status"))
+                  print("Error message:", error.get("message"))
+              except ValueError:
+                  print("Registration failed:", response.status_code)
+              response.raise_for_status()
+
+          result = response.json()
+          print("Registration successful")
+          print("Registration:", result.get("name"))
+          print("GCP project IDs:", result.get("gcpIds"))
+          PY

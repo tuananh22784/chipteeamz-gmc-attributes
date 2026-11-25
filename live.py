@@ -11,19 +11,40 @@ def token():
  creds,project=google.auth.default(scopes=['https://www.googleapis.com/auth/content'])
  creds.refresh(Request());return creds.token
 
-def google_request(method,path,**kw):
- for attempt in range(5):
-  t=token();r=requests.request(method,'https://merchantapi.googleapis.com/'+path,headers={'Authorization':'Bearer '+t,'Content-Type':'application/json'},timeout=60,**kw)
-  if r.status_code in (429,500,502,503,504) and attempt<4:time.sleep(2**attempt);continue
-   if not r.ok:
-    try:
-        error_data = r.json().get("error", {})
-        print("Merchant API HTTP status:", r.status_code)
-        print("Merchant API error status:", error_data.get("status", ""))
-        print("Merchant API error message:", error_data.get("message", ""))
-    except ValueError:
-        print("Merchant API returned a non-JSON error response")
-  r.raise_for_status();return r.json() if r.content else {}
+
+def google_request(method, url, **kwargs):
+    import requests
+    import google.auth
+    from google.auth.transport.requests import Request
+
+    credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/content"]
+    )
+    credentials.refresh(Request())
+
+    headers = kwargs.pop("headers", {})
+    headers["Authorization"] = f"Bearer {credentials.token}"
+
+    r = requests.request(
+        method,
+        url,
+        headers=headers,
+        timeout=60,
+        **kwargs
+    )
+
+    if not r.ok:
+        try:
+            error_data = r.json().get("error", {})
+            print("Merchant API HTTP status:", r.status_code)
+            print("Merchant API error status:", error_data.get("status", ""))
+            print("Merchant API error message:", error_data.get("message", ""))
+        except ValueError:
+            print("Merchant API returned a non-JSON error response")
+
+    r.raise_for_status()
+    return r.json() if r.content else {}
+
 
 def merchant_items(limit=0):
  account=os.environ['GMC_ACCOUNT_ID'];params={'pageSize':min(1000,limit) if limit else 1000};scanned=0

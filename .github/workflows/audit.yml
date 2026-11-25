@@ -1,0 +1,33 @@
+name: GMC Attributes Read-Only Audit
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Read-only GMC audit and Shopify verification
+        env:
+          GMC_ACCOUNT_ID: ${{ secrets.GMC_ACCOUNT_ID }}
+          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/merchant-credentials.json
+          MERCHANT_SERVICE_ACCOUNT_JSON: ${{ secrets.MERCHANT_SERVICE_ACCOUNT_JSON }}
+        run: |
+          test -n "$MERCHANT_SERVICE_ACCOUNT_JSON"
+          printf '%s' "$MERCHANT_SERVICE_ACCOUNT_JSON" > merchant-credentials.json
+          trap 'rm -f merchant-credentials.json' EXIT
+          python engine.py audit-live --limit 500 --out out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gmc-audit
+          path: out/
+          if-no-files-found: ignore

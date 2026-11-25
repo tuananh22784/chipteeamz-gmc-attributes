@@ -1,4 +1,4 @@
-"""ChipteeAmz GMC Attribute Auto-Audit V1.2 - strictly read-only."""
+"""ChipteeAmz GMC Attribute Auto-Audit V1.3 - strictly read-only."""
 import argparse
 import collections
 import csv
@@ -57,7 +57,7 @@ OFFER_ID = re.compile(r'^shopify_[A-Za-z]{2}_([0-9]+)_([0-9]+)$')
 COLUMNS = ['id','language','feed_label','title','variant_options','variant_style','shopify_product_id','shopify_variant_id',
            'shopify_status','description_source','current_color','current_pattern','current_material',
            'proposed_color','color_evidence','proposed_pattern','pattern_evidence',
-           'proposed_material','material_evidence','qa_status','review_reason']
+           'proposed_material','material_evidence','color_qa','pattern_qa','material_qa','approved_color','approved_pattern','approved_material','qa_status','review_reason']
 
 def color_mentions(s):
     found, taken = [], []
@@ -92,14 +92,14 @@ def extract(title, description, variant_style='', selected_color='', shopify_tit
             reasons.append('ambiguous_variant_color')
     if not result['proposed_color']:
         # Shopify title is preferred; GMC may append style/size variant data.
-        chosen = product_title.split(' | ')[0][:230]
+        chosen = product_title[:500]
         colors = color_mentions(chosen)
         if 1 <= len(colors) <= 3:
             result['proposed_color'] = '/'.join(colors)
             result['color_evidence'] = 'shopify_product_title: ' + chosen[:230]
         else:
             reasons.append('color_missing_or_ambiguous')
-    chosen = product_title.split(' | ')[0][:250]
+    chosen = product_title[:500]
     patterns = [name for name, rx in PATTERNS.items() if re.search(rx, chosen, re.I)]
     if len(patterns) == 1:
         if patterns[0] == 'Striped' and re.search(r'\b(?:flag|patriotic|stars and stripes)\b', chosen, re.I):
@@ -134,7 +134,7 @@ def extract(title, description, variant_style='', selected_color='', shopify_tit
         reasons.append('material_not_explicit_or_ambiguous')
     # Material may be mentioned in a template applied to many styles; flag for variant-specific QA.
     if result['proposed_material'] and re.search(STYLE_RX, variant_style, re.I):
-        reasons.append('material_requires_variant_style_confirmation')
+        reasons.append('material_variant_unverified')
     result['review_reason'] = ';'.join(reasons)
     return result
 
@@ -162,92 +162,143 @@ def is_missing_color(value):
     return str(value or '').strip().strip("'\"").casefold() in ('','one color','one colour','onecolor')
 
 class Reporter:
+    """CSV output and per-attribute decisions. No write endpoint exists."""
+    NAMES = ('audit','candidates_review','ready_for_qa','needs_review','auto_fix_eligible','approved_attributes')
     def __init__(self, out_dir, append=False):
         self.out = Path(out_dir)
         self.out.mkdir(parents=True, exist_ok=True)
         self.files, self.writers = {}, {}
-        names = ['audit','candidates_review','ready_for_qa','needs_review','auto_fix_eligible']
-        for name in names:
-            path = self.out / (name + '.csv')
-            exist = append and path.exists() and path.stat().st_size > 0
-            f = path.open('a' if exist else 'w', encoding='utf-8-sig' if not exist else 'utf-8', newline='')
-            w = csv.DictWriter(f, fieldnames=COLUMNS)
-            if not exist:
-                w.writeheader()
-            self.files[name], self.writers[name] = f, w
         self.counts = collections.Counter()
         self.seen = set()
-        # Preload IDs when resuming to prevent duplicate rows if token was reused.
-        if append and (self.out/'audit.csv').exists():
-            with (self.out/'audit.csv').open(encoding='utf-8-sig', newline='') as f:
-                for row in csv.DictReader(f):
-                    self.seen.add((row['id'], row['language'], row['feed_label']))
-    def process(self, raw, source='live'):
-        item = parse_item(raw)
-        identity = (item['id'], item['language'], item['feed_label'])
+        if append:
+            audit = self.out/'audit.csv'
+            if not audit.exists():
+                raise ValueError('Resume requires existing audit.csv')
+            with audit.open(encoding='utf-8-sig',newline='') as f:
+                r = csv.DictReader(f)
+                if r.fieldnames != COLUMNS:
+                    raise ValueError('Resume CSV schema mismatch; use new scan, not append')
+                for row in r:
+                    identity=(row['id'],row['language'],row['feed_label'])
+                    if identity in self.seen:
+                        raise ValueError('Existing audit contains duplicate identities')
+                    self.seen.add(identity)
+                    self._count_row(row)
+        for name in self.NAMES:
+            path=self.out/(name+'.csv')
+            exist=append and path.exists() and path.stat().st_size>0
+            if append and not exist:
+                raise ValueError('Resume requires all CSV files; missing '+name)
+            f=path.open('a' if exist else 'w',encoding='utf-8' if exist else 'utf-8-sig',newline='')
+            w=csv.DictWriter(f,fieldnames=COLUMNS)
+            if not exist:
+                w.writeheader()
+            self.files[name],self.writers[name]=f,w
+
+    def _count_row(self, row):
+        self.counts['scanned']+=1
+        verified=row['shopify_status']=='SHOPIFY_VERIFIED'
+        self.counts['shopify_verified' if verified else 'shopify_unverified']+=1
+        for key in ('color','pattern','material'):
+            missing=is_missing_color(row['current_color']) if key=='color' else not str(row['current_'+key]).strip()
+            if missing: self.counts['missing_'+key]+=1
+            if row['proposed_'+key]: self.counts['proposed_'+key]+=1
+            if row['approved_'+key]: self.counts['approved_'+key]+=1
+        if any(row['proposed_'+k] for k in ('color','pattern','material')):
+            self.counts['has_proposals']+=1
+        if any(row['approved_'+k] for k in ('color','pattern','material')):
+            self.counts['approved_items']+=1
+        if row['qa_status']=='READY_FOR_QA':self.counts['ready_for_qa']+=1
+        elif row['qa_status']=='NEEDS_REVIEW':self.counts['needs_review']+=1
+        elif row['qa_status']=='NO_MISSING_FIELDS':self.counts['already_filled']+=1
+
+    def process(self,raw,source='live'):
+        item=parse_item(raw)
+        identity=(item['id'],item['language'],item['feed_label'])
         if identity in self.seen:
-            self.counts['duplicates_skipped'] += 1
+            self.counts['duplicates_skipped']+=1
             return
         self.seen.add(identity)
-        self.counts['scanned'] += 1
-        verified = item['shopify_status'] == 'SHOPIFY_VERIFIED'
-        self.counts['shopify_verified' if verified else 'shopify_unverified'] += 1
-        missing = {'color': is_missing_color(item['color']), 'pattern': not str(item['pattern']).strip(),
-                   'material': not str(item['material']).strip()}
-        for key, value in missing.items():
-            if value:
-                self.counts['missing_' + key] += 1
-        candidate = extract(item['title'], item['description'] if verified else '',
-                            item['variant_style'], item['selected_color'], item['shopify_title']) if verified else {}
-        proposals = {key: candidate.get('proposed_' + key, '') if missing[key] else '' for key in missing}
-        for key, value in proposals.items():
-            if value:
-                self.counts['proposed_' + key] += 1
-        has_proposal = any(proposals.values())
-        if not any(missing.values()):
-            status = 'NO_MISSING_FIELDS'
-        elif verified and has_proposal:
-            status = 'READY_FOR_QA'
-        else:
-            status = 'NEEDS_REVIEW'
-        reasons = []
-        if not verified:
-            reasons.append(item['shopify_status'] or 'shopify_not_verified')
-        if candidate.get('review_reason'):
-            reasons.append(candidate['review_reason'])
-        row = {
-            'id': item['id'], 'language': item['language'], 'feed_label': item['feed_label'],
-            'title': item['title'], 'variant_options': item['variant_options'], 'variant_style': item['variant_style'],
-            'shopify_product_id': item['shopify_product_id'], 'shopify_variant_id': item['shopify_variant_id'],
-            'shopify_status': item['shopify_status'] or 'GMC_EXPORT_UNVERIFIED',
-            'description_source': 'Shopify_default_description_API' if verified else 'GMC_or_unverified',
-            'current_color': item['color'], 'current_pattern': item['pattern'], 'current_material': item['material'],
-            'qa_status': status, 'review_reason': ';'.join(reasons),
-        }
-        for key in ('color','pattern','material'):
-            row['proposed_' + key] = proposals[key]
-            row[key + '_evidence'] = candidate.get(key + '_evidence','') if proposals[key] else ''
+        verified=item['shopify_status']=='SHOPIFY_VERIFIED'
+        missing={'color':is_missing_color(item['color']),
+                 'pattern':not str(item['pattern']).strip(),
+                 'material':not str(item['material']).strip()}
+        candidate=extract(item['title'],item['description'] if verified else '',
+                          item['variant_style'],item['selected_color'],item['shopify_title']) if verified else {}
+        proposals={k:candidate.get('proposed_'+k,'') if missing[k] else '' for k in missing}
+        reasons=[]
+        if not verified:reasons.append(item['shopify_status'] or 'shopify_not_verified')
+        if candidate.get('review_reason'):reasons.append(candidate['review_reason'])
+        qa={}
+        approved={k:'' for k in missing}
+        for key in missing:
+            proposal=proposals[key]
+            evidence=candidate.get(key+'_evidence','')
+            if not missing[key]:
+                qa[key]='NOT_MISSING'
+            elif not verified:
+                qa[key]='SHOPIFY_UNVERIFIED'
+            elif not proposal:
+                qa[key]='UNKNOWN_OR_AMBIGUOUS'
+            elif key=='material':
+                qa[key]='MATERIAL_NEEDS_REVIEW'
+            elif key=='color' and evidence.startswith('shopify_color_option: '):
+                qa[key]='COLOR_VARIANT_VERIFIED'
+                approved[key]=proposal
+            elif key=='color' and evidence.startswith('shopify_product_title: '):
+                qa[key]='COLOR_TITLE_VERIFIED'
+                approved[key]=proposal
+            elif key=='pattern' and evidence.startswith('shopify_product_title: '):
+                qa[key]='PATTERN_TITLE_VERIFIED'
+                approved[key]=proposal
+            else:
+                qa[key]='NEEDS_REVIEW'
+        has_proposal=any(proposals.values())
+        if not any(missing.values()):status='NO_MISSING_FIELDS'
+        elif verified and has_proposal:status='READY_FOR_QA'
+        else:status='NEEDS_REVIEW'
+        row={'id':item['id'],'language':item['language'],'feed_label':item['feed_label'],
+             'title':item['title'],'variant_options':item['variant_options'],'variant_style':item['variant_style'],
+             'shopify_product_id':item['shopify_product_id'],'shopify_variant_id':item['shopify_variant_id'],
+             'shopify_status':item['shopify_status'] or 'GMC_EXPORT_UNVERIFIED',
+             'description_source':'Shopify_default_description_API' if verified else 'GMC_or_unverified',
+             'current_color':item['color'],'current_pattern':item['pattern'],'current_material':item['material'],
+             'qa_status':status,'review_reason':';'.join(reasons)}
+        for key in missing:
+            row['proposed_'+key]=proposals[key]
+            row[key+'_evidence']=candidate.get(key+'_evidence','') if proposals[key] else ''
+            row[key+'_qa']=qa[key]
+            row['approved_'+key]=approved[key]
         self.writers['audit'].writerow(row)
-        if has_proposal:
-            self.writers['candidates_review'].writerow(row)
-            self.counts['has_proposals'] += 1
-        if status == 'READY_FOR_QA':
-            self.writers['ready_for_qa'].writerow(row)
-            self.counts['ready_for_qa'] += 1
-        elif status == 'NEEDS_REVIEW':
-            self.writers['needs_review'].writerow(row)
-            self.counts['needs_review'] += 1
-        else:
-            self.counts['already_filled'] += 1
-    def close(self):
+        if has_proposal:self.writers['candidates_review'].writerow(row)
+        if status=='READY_FOR_QA':self.writers['ready_for_qa'].writerow(row)
+        elif status=='NEEDS_REVIEW':self.writers['needs_review'].writerow(row)
+        if any(approved.values()):self.writers['approved_attributes'].writerow(row)
+        self._count_row(row)
+
+    def sync(self):
+        import os
         for f in self.files.values():
-            f.close()
-    def summary(self, **metadata):
-        result = dict(self.counts)
+            f.flush()
+            os.fsync(f.fileno())
+    def close(self):
+        for f in self.files.values():f.close()
+    def summary(self,**metadata):
+        result=dict(self.counts)
         result.update(metadata)
-        result.update({'mode':'READ_ONLY', 'auto_fix_eligible':0, 'qa_policy':'MANUAL_APPROVAL_REQUIRED'})
-        (self.out/'summary.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+        result.update({'mode':'READ_ONLY','auto_fix_eligible':0,'qa_policy':'TITLE_APPROVED_READ_ONLY_MATERIAL_REVIEW'})
+        atomic_json(self.out/'summary.json',result)
         return result
+
+def atomic_json(path,obj):
+    import os
+    path=Path(path)
+    temp=path.with_suffix(path.suffix+'.tmp')
+    with temp.open('w',encoding='utf-8') as f:
+        json.dump(obj,f,indent=2,ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temp,path)
 
 def read_export(path):
     with zipfile.ZipFile(path) as z:
@@ -259,60 +310,59 @@ def read_export(path):
                 yield from csv.DictReader(fh, delimiter='\t' if filename.lower().endswith('.tsv') else ',')
 
 def run_live(args):
+    import os
     from live import merchant_page, shopify_descriptions
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
-    checkpoint = out/'checkpoint.json'
-    cursor, pages, rows_before = '', 0, 0
-    append = args.resume and checkpoint.exists()
-    if append:
-        state = json.loads(checkpoint.read_text(encoding='utf-8'))
-        if state.get('account') != __import__('os').environ['GMC_ACCOUNT_ID'].strip():
-            raise ValueError('Checkpoint GMC account mismatch')
-        if state.get('completed'):
-            raise ValueError('Checkpoint already completed; start a new scan')
-        cursor = state.get('next_page_token','')
-        pages, rows_before = state.get('pages',0), state.get('scanned',0)
-        if not cursor:
-            raise ValueError('Checkpoint has no cursor; cannot resume')
-    reporter = Reporter(out, append=append)
-    # Existing counts restored from previous summary; new counts accumulated for this run.
-    previous = {}
-    if append and (out/'summary.json').exists():
-        previous = json.loads((out/'summary.json').read_text(encoding='utf-8'))
-    in_run, page_count, completed = 0, 0, False
+    out=Path(args.out)
+    out.mkdir(parents=True,exist_ok=True)
+    checkpoint=out/'checkpoint.json'
+    account=os.environ['GMC_ACCOUNT_ID'].strip()
+    cursor=''
+    pages=0
+    if args.resume:
+        if not checkpoint.exists():
+            raise ValueError('Resume requested but checkpoint.json missing. Refusing to restart silently.')
+        state=json.loads(checkpoint.read_text(encoding='utf-8'))
+        if state.get('schema')!=3 or state.get('account')!=account:
+            raise ValueError('Checkpoint schema/account mismatch. Start new V1.3 scan.')
+        if state.get('completed'):raise ValueError('Scan completed; start new scan instead')
+        if int(state.get('page_size',-1))!=args.page_size:
+            raise ValueError('Resume page_size differs from checkpoint')
+        cursor=state.get('next_page_token','')
+        pages=int(state['pages'])
+        if not cursor:raise ValueError('Checkpoint cursor empty; cannot resume')
+    else:
+        # Explicit new scan, remove stale prior data before writing.
+        for file in (*Reporter.NAMES,'summary'):
+            path=out/(file+'.json' if file=='summary' else file+'.csv')
+            if path.exists():path.unlink()
+        if checkpoint.exists():checkpoint.unlink()
+    reporter=Reporter(out,append=args.resume)
+    if args.resume and reporter.counts['scanned'] != int(state.get('scanned',-1)):
+        reporter.close()
+        raise ValueError('CSV/checkpoint row count mismatch; refusing unsafe resume')
+    page_count=0
     try:
         while True:
-            items, next_token = merchant_page(cursor, args.page_size)
-            if not items and next_token == cursor and next_token:
-                raise RuntimeError('Merchant API page cursor did not advance')
+            if args.max_pages and page_count>=args.max_pages:break
+            items,next_token=merchant_page(cursor,args.page_size)
+            if next_token and next_token==cursor:
+                raise RuntimeError('Merchant API cursor did not advance')
             shopify_descriptions(items)
-            for raw in items:
-                reporter.process(raw)
-            in_run += len(items)
-            page_count += 1
-            pages += 1
-            # Persist report before checkpoint, so a completed page has durable output.
-            for f in reporter.files.values():
-                f.flush()
-            cursor = next_token
-            completed = not bool(next_token)
-            cumulative = collections.Counter({key: int(previous.get(key,0)) for key in reporter.counts})
-            cumulative.update(reporter.counts)
-            # Avoid overwriting old counter fields not present in the current run.
-            for key, val in previous.items():
-                if key not in cumulative and isinstance(val, int) and key not in ('pages','scanned'):
-                    cumulative[key] = val
-            meta = dict(cumulative)
-            meta.update({'pages':pages,'completed':completed,'scanned':rows_before + reporter.counts['scanned'],
-                         'next_page_token_present':bool(cursor)})
-            meta.update({'mode':'READ_ONLY','auto_fix_eligible':0,'qa_policy':'MANUAL_APPROVAL_REQUIRED'})
-            (out/'summary.json').write_text(json.dumps(meta,indent=2),encoding='utf-8')
-            checkpoint.write_text(json.dumps({'account':__import__('os').environ['GMC_ACCOUNT_ID'].strip(),
-                 'next_page_token':cursor,'pages':pages,'scanned':meta['scanned'],'completed':completed},indent=2),encoding='utf-8')
-            print('Processed page:', pages, 'items this run:', in_run, 'cumulative items:', meta['scanned'], 'complete:', completed)
-            if completed or (args.max_pages and page_count >= args.max_pages):
-                break
+            for raw in items:reporter.process(raw)
+            reporter.sync()
+            pages+=1
+            page_count+=1
+            completed=not bool(next_token)
+            summary=reporter.summary(pages=pages,completed=completed,
+                                    next_page_token_present=bool(next_token),
+                                    page_size=args.page_size,
+                                    account=account)
+            atomic_json(checkpoint,{'schema':3,'account':account,'page_size':args.page_size,
+                        'next_page_token':next_token,'pages':pages,
+                        'scanned':summary['scanned'],'completed':completed})
+            print('Committed page',pages,'unique items',summary['scanned'],'complete',completed,flush=True)
+            cursor=next_token
+            if completed:break
     finally:
         reporter.close()
     return json.loads((out/'summary.json').read_text(encoding='utf-8'))

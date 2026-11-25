@@ -25,6 +25,14 @@ def google_request(method, url, **kwargs):
     headers = kwargs.pop("headers", {})
     headers["Authorization"] = f"Bearer {credentials.token}"
 
+    
+    # Support both relative and absolute Merchant API URLs
+    if url.startswith("/"):
+        url = url.lstrip("/")
+
+    if not url.startswith(("https://", "http://")):
+        url = "https://merchantapi.googleapis.com/" + url
+
     r = requests.request(
         method,
         url,
@@ -32,6 +40,7 @@ def google_request(method, url, **kwargs):
         timeout=60,
         **kwargs
     )
+
 
     if not r.ok:
         try:

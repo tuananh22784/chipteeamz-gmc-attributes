@@ -15,6 +15,14 @@ def google_request(method,path,**kw):
  for attempt in range(5):
   t=token();r=requests.request(method,'https://merchantapi.googleapis.com/'+path,headers={'Authorization':'Bearer '+t,'Content-Type':'application/json'},timeout=60,**kw)
   if r.status_code in (429,500,502,503,504) and attempt<4:time.sleep(2**attempt);continue
+   if not r.ok:
+    try:
+        error_data = r.json().get("error", {})
+        print("Merchant API HTTP status:", r.status_code)
+        print("Merchant API error status:", error_data.get("status", ""))
+        print("Merchant API error message:", error_data.get("message", ""))
+    except ValueError:
+        print("Merchant API returned a non-JSON error response")
   r.raise_for_status();return r.json() if r.content else {}
 
 def merchant_items(limit=0):

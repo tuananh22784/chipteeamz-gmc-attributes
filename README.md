@@ -1,35 +1,61 @@
-# ChipteeAmz GMC Attribute Auto-Audit V1.1
+# ChipteeAmz GMC Attribute Audit V1.2
 
-**READ ONLY. No Merchant API write code is shipped in V1.1.** Keep Simprosys as the primary feed; Shopify default description is authoritative when matched. Does not fetch EasySlide.
+**READ-ONLY – absolutely no GMC writes.** Simprosys main feed, Shopify Default Description and GMC `One Color` Attribute Rule are unchanged. EasySlide not used in V1.2. This is an auditable **candidate generator**, not an automated correction system.
 
-## Deploy (replace V1 files at repository root)
-1. Download ZIP and extract it **before** uploading. Upload `.github/workflows/audit.yml`, `engine.py`, `live.py`, `requirements.txt`, and `tests/test_engine.py` to the same repository root as your existing V1 files. Delete or disable old V1 workflow `audit.yml` if necessary (the same path overwrites it). Do not upload the enclosing ZIP as a lone file.
-2. Keep existing GitHub Secrets **unchanged**: `GMC_ACCOUNT_ID`, `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_ADMIN_TOKEN`, `MERCHANT_SERVICE_ACCOUNT_JSON`.
-3. GitHub → Actions → **GMC Attributes V1.1 Read-Only Audit** → Run workflow. Start with `limit=500`.
-4. Under workflow artifacts, download `gmc-attributes-v1-1-audit`; inspect `summary.json`, `audit.csv`, `candidates_review.csv`, `needs_review.csv`, `auto_fix_eligible.csv`.
+## Deploy into existing GitHub repository
 
-## QA safeguards
-- `SHOPIFY_VERIFIED` means **the Shopify product AND the exact variant ID** from the offer ID were found. Otherwise status is `UNMATCHED_OFFER_ID`, `SHOPIFY_NOT_FOUND`, `VARIANT_NOT_FOUND`, or `VARIANT_NOT_FOUND_OR_UNPAGINATED`.
-- `description_source` claims Shopify only when `SHOPIFY_VERIFIED`. Other cases use `GMC_processed_description_or_unknown`. The extractor **does not use unverified description to propose materials**.
-- `color_evidence`, `pattern_evidence`, `material_evidence` include short source snippets. Color extraction prefers Shopify `Color` option, then product title; compound colors such as Navy Blue are handled first.
-- Pattern extraction uses product title or explicitly labeled pattern statement only, **not generic descriptions**. Multiple patterns and flag/stripe ambiguity remain for review.
-- Material extraction only accepts explicit single material composition, and rejects multiple percentages/blends or variant-dependent examples. Never infer composition from sport/niche.
-- **All** proposed values are `NEEDS_REVIEW` in V1.1; `auto_fix_eligible.csv` deliberately has headers but no rows. There is **no auto-fix/upload command**. Auto-approval requires a later validation policy with proven precision.
-- Legacy non-Shopify offer IDs are not mapped from partial numbers or guessed IDs.
-- Only the **first 100 Shopify variant nodes** are returned; products with more variants may be marked `VARIANT_NOT_FOUND_OR_UNPAGINATED`. Extend pagination before full-store scanning.
-- Run only small sample first. `products.list` at GMC scale requires persistent checkpoints, quota management, scheduling and change tracking (not implemented in V1.1).
-- Audit reports include customer-facing product titles; artifacts retention configured to 7 days. Never print credentials or JSON key to logs.
+Unzip package and upload contents of `chipteeamz_gmc_v1_2` to the **repository root** (replace `engine.py`, `live.py`, `requirements.txt`, `.github/workflows/audit.yml`, `README.md`, `tests/test_engine.py`). Keep existing secrets:
 
-## What should improve compared to V1
-- Honest Shopify match status in every row (the prior report incorrectly labeled all descriptions `Shopify_default_description_API`).
-- Fewer false Pattern candidates from generic descriptions and compound Color duplicates.
-- Material proposals require explicit compositions, with evidence.
-- No silent auto-fix, no changes to `One Color` GMC rule, GMC product data, Shopify descriptions or Simprosys.
+- `GMC_ACCOUNT_ID`
+- `SHOPIFY_SHOP_DOMAIN` = `premiumqualityblanket.myshopify.com`
+- `SHOPIFY_ADMIN_TOKEN` (read_products)
+- `MERCHANT_SERVICE_ACCOUNT_JSON`
 
-## Local verification
+In GitHub Actions, choose **GMC Attributes V1.2 Read-Only Audit**. Start with `page_size=500`, `max_pages=1`. Then test `max_pages=5` and review run times. **Do not run `max_pages=0` on the full store before load/performance QA.**
+
+## Files in the workflow artifact
+
+- `audit.csv`: all processed offers, verified Shopify status, variant options, current fields, candidates and snippets
+- `ready_for_qa.csv`: verified offers with at least one candidate. **NOT APPROVED**.
+- `candidates_review.csv`: all offers with candidates, equivalent to ready_for_qa for live runs
+- `needs_review.csv`: missing fields but no verified candidates or failed ID match
+- `auto_fix_eligible.csv`: **header only**, intentionally no auto-approval
+- `summary.json`: counts, pages, completed flag
+- `checkpoint.json`: next Merchant API page token and account, intended for explicit resume only; no secrets but may expire
+
+## Scan pagination and resuming
+
+A single workflow run pages through up to `max_pages` Merchant API pages, writing reports and checkpoint after every page. `max_pages=0` processes all pages until completion or GitHub job timeout. To resume in a **new run**, restore the previous artifact's **entire `out/` directory** (including `audit.csv`, `summary.json`, `checkpoint.json`) into the runner, and run:
+
 ```bash
-python -m unittest discover -s tests -v
-python engine.py audit-export --zip "biker products_2026-11-19_05-23-03.zip" --limit 500 --out out
+python engine.py audit-live --out out --page-size 500 --max-pages 5 --resume
 ```
 
-Next milestone: use 500-item QA to establish verified extraction accuracy and item/variant mapping coverage, then implement safer incremental scanning and controlled write-back in V1.2.
+The bundled GitHub workflow **does not automatically restore artifacts between separate runs**. Thus, each ordinary click of Run workflow without restoration **starts at page 1**. Do not interpret separate default runs as coverage of the entire GMC catalog. If tokens expire, restart full scan from page 1. Consider a persistent store/queue for >1m offers in a later version.
+
+## Correctness improvements vs V1.1
+
+1. Exact Shopify variant fetched via ProductVariant node, not `variants(first: 100)`; verify it actually belongs to parsed Shopify Product ID.
+2. Persist Shopify variant options and non-color/non-size style so material decisions can be reviewed for the correct subtype.
+3. Explicit material and source snippets, conservative blocks for mixed/variant-dependent descriptions; style confirmation required for any material suggestion on apparel variants.
+4. `READY_FOR_QA` separate from `NEEDS_REVIEW`. **Neither means safe for auto-write.**
+5. Page-size/max-pages control, page-level output, checkpoint; safety cap by operator.
+6. `One Color` remains a placeholder to flag; the existing GMC rule is untouched.
+
+## Known limitations / next gate
+
+- Pattern & multi-color names are proposals, not image-confirmed actual garment colors.
+- Shopify description can be generic across variants; explicit material evidence is not guaranteed variant-specific.
+- Legacy non-`shopify_US_product_variant` offer IDs remain `UNMATCHED_OFFER_ID` (no guessing).
+- Shopify GraphQL product variant lookup may be rate-limited; huge scans need Bulk API/queue and incremental workflow in V1.3.
+- The Merchant API page token is an opaque cursor and may expire. Restore *all* files if resuming; a token without prior audit output loses prior rows.
+- Do not commit files containing customer or confidential details, any access key, or the Merchant Service Account JSON.
+
+## Local tests
+
+```bash
+python -m unittest discover -s tests -v
+python engine.py audit-export --zip your-gmc-export.zip --limit 500 --out out
+```
+
+Acceptance gate before any writes: independent human review of representative combinations (niche, subtype, color, variant), ID 100% matched, explicit pattern/material evidence, safe rule precedence versus `One Color`, dedicated rollback plan.

@@ -58,7 +58,9 @@ OFFER_ID = re.compile(r'^shopify_[A-Za-z]{2}_([0-9]+)_([0-9]+)$')
 COLUMNS = ['id','language','feed_label','title','variant_options','variant_style','shopify_product_id','shopify_variant_id',
            'shopify_status','description_source','current_color','current_pattern','current_material',
            'proposed_color','color_evidence','proposed_pattern','pattern_evidence',
-           'proposed_material','material_evidence','color_qa','pattern_qa','material_qa','approved_color','approved_pattern','approved_material','qa_status','review_reason']
+           'proposed_material','material_evidence','color_qa','pattern_qa','material_qa','approved_color','approved_pattern','approved_material','qa_status','review_reason',
+           'material_rule_id','material_source','material_matched_subtype','material_decision',
+           'material_reason','material_component_1','material_component_2']
 
 def color_mentions(s):
     found, taken = [], []
@@ -253,7 +255,7 @@ class Reporter:
         if any(row['approved_'+k] for k in ('color','pattern','material')):
             self.counts['approved_items']+=1
         if row['qa_status']=='READY_FOR_QA':self.counts['ready_for_qa']+=1
-        elif row['qa_status']=='NEEDS_REVIEW':self.counts['needs_review']+=1
+        elif row['qa_status'] in ('NEEDS_REVIEW','MATERIAL_OR_PATTERN_REVIEW'):self.counts['needs_review']+=1
         elif row['qa_status']=='NO_MISSING_FIELDS':self.counts['already_filled']+=1
 
     def process(self,raw,source='live'):

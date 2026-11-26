@@ -1,0 +1,57 @@
+﻿rule_id,style,normalized_style,fabric_composition,source_row
+FAB001,Long Sleeve UPF,long sleeve upf,100% polyester,2
+FAB002,Long sleeves hooded UPF,long sleeve hooded upf,100% polyester,3
+FAB003,Kid Long Sleeve UPF,kid long sleeve upf,100% polyester,4
+FAB004,Kid Long sleeves hooded UPF,kid long sleeve hooded upf,100% polyester,5
+FAB005,Kid T-shirt,kid t shirt,100% polyester,6
+FAB006,Kid Polo shirt,kid polo shirt,100% polyester,7
+FAB007,Kid Quarter zip shirt,kid quarter zip shirt,100% polyester,8
+FAB008,T-shirt UPF,t shirt upf,100% polyester,9
+FAB009,Women T-shirt UPF,women t shirt upf,100% polyester,10
+FAB010,Women V-neck T-Shirt UPF,women v-neck t shirt upf,100% polyester,11
+FAB011,Women Quarter Zip,women quarter zip,100% polyester,12
+FAB012,Men's Short Sleeve Quarter ZIp,men short sleeve quarter zip,100% polyester,13
+FAB013,Men Short sleeve polo shirt,men short sleeve polo shirt,100% polyester,14
+FAB014,Women Short sleeve polo shirt,women short sleeve polo shirt,100% polyester,15
+FAB015,Men's Long sleeve polo shirt,men long sleeve polo shirt,100% polyester,16
+FAB016,Women's Long sleeve polo shirt,women long sleeve polo shirt,100% polyester,17
+FAB017,Sleeveless polo shirt,sleeveless polo shirt,100% polyester,18
+FAB018,Long Sleeve Quarter Zip,long sleeve quarter zip,100% polyester,19
+FAB019,Women's Long Sleeve Quarter Zip,women long sleeve quarter zip,100% polyester,20
+FAB020,Long sleeved quarter zip hoodie,long sleeved quarter zip hoodie,100% polyester,21
+FAB021,Round neck basketball vest,round neck basketball vest,100% polyester,22
+FAB022,Man Baseball Jersey,men baseball jersey,100% polyester,23
+FAB023,Women Baseball Jersey,women baseball jersey,100% polyester,24
+FAB024,Zip polo shirt,zip polo shirt,100% polyester,25
+FAB025,V-neck Long Sleeves,v-neck long sleeve,100% polyester,26
+FAB026,One button polo short sleeved shirt,one button polo short sleeved shirt,100% polyester,27
+FAB027,Men's Short Sleeve Quarter-Zip Henley,men short sleeve quarter zip henley,100% polyester,28
+FAB028,Men's Short Sleeve Quarter-Zip Henley with pocket,men short sleeve quarter zip henley with pocket,100% polyester,29
+FAB029,Women's Short-Sleeve Quarter-Zip Henley,women short-sleeve quarter zip henley,100% polyester,30
+FAB030,Women's Short-Sleeve Quarter-Zip Henley with pocket,women short-sleeve quarter zip henley with pocket,100% polyester,31
+FAB031,Men's Quarter-Zip Polo,men quarter zip polo,100% polyester,32
+FAB032,Men's Quarter-Zip Polo with Pocket,men quarter zip polo with pocket,100% polyester,33
+FAB033,Women's Quarter-Zip Polo,women quarter zip polo,100% polyester,34
+FAB034,Women's Quarter-Zip Polo with Pocket,women quarter zip polo with pocket,100% polyester,35
+FAB035,Men's Short Sleeve Quarter-Zip Polo Shirt Zippered pocket,men short sleeve quarter zip polo shirt zippered pocket,100% polyester,36
+FAB036,Zipper pocket long sleeves hooded UPF,zipper pocket long sleeve hooded upf,100% polyester,37
+FAB037,Men's Long Sleeve Quarter-Zip Henley,men long sleeve quarter zip henley,100% polyester,38
+FAB038,Men's Short Sleeve Polo Henley,men short sleeve polo henley,100% polyester,39
+FAB039,T-shirt UPF with Pocket,t shirt upf with pocket,100% polyester,40
+FAB040,Men's Short Sleeve Full-Zip Henley,men short sleeve full-zip henley,100% polyester,41
+FAB041,Women's Short Sleeve Full-Zip Henley,women short sleeve full-zip henley,100% polyester,42
+FAB042,Quarter Zip Sweatshirt,quarter zip sweatshirt,100% polyester,43
+FAB043,220g air layer Sweatshirt,220g air layer sweatshirt,100% polyester,44
+FAB044,220g air layer Hoodie,220g air layer hoodie,100% polyester,45
+FAB045,220g air layer Kid Hoodie,220g air layer kid hoodie,100% polyester,46
+FAB046,220g air layer Zip up Hoodie,220g air layer zip up hoodie,100% polyester,47
+FAB047,Hawaiian Shirt,hawaiian shirt,100% polyester,48
+FAB048,Tanktop,tanktop,100% polyester,49
+FAB049,Vest,vest,100% polyester,50
+FAB050,Leggings,leggings,96% polyester+4% spandex,51
+FAB051,Face Shield,face shield,95% polyester+5% spandex,52
+FAB052,T-shirt,t shirt,Cotton,53
+FAB053,Women T-shirt,women t shirt,Cotton,54
+FAB054,Long sleeves,long sleeve,Cotton,55
+FAB055,Hoodie,hoodie,Cotton,56
+FAB056,Sweatshirt,sweatshirt,Cotton,57

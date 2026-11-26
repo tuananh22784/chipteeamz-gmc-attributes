@@ -48,6 +48,7 @@ PATTERNS = {
     'Tie-Dye': r'\btie[ -]?dye\b',
     'Polka Dot': r'\bpolka[ -]?dots?\b',
     'Checkered': r'\b(?:checkerboard|checkered)\b',
+    'Argyle': r'\bargyle\b',
     'Leopard Print': r'\bleopard[ -]?print\b',
     'Abstract': r'\babstract\b',
 }
@@ -74,6 +75,44 @@ def color_mentions(s):
             result.append(name)
             seen.add(name)
     return result
+
+def description_pattern_candidates(description):
+    """Return a single well-evidenced design pattern from a product description.
+
+    Do not use generalized marketing/cross-sell sentences or infer generic Printed.
+    This fallback only proposes candidates; never auto-approves description evidence.
+    """
+    desc = plain(description)
+    found = []
+    sentences = re.split(r'(?<=[.!?])\s+|[\n\r]+', desc)
+    marketing = re.compile(
+        r'\b(?:other designs?|other patterns?|shop our|browse our|our collection|'
+        r'choose from|available in|for example|e\.g\.|such as|different designs?|'
+        r'variety of patterns?|inspired by|mix and match)\b', re.I)
+    design_context = re.compile(
+        r'\b(?:pattern|design|graphic|print|printed|features?|featuring|'
+        r'showcases?|decorated|all[ -]?over)\b', re.I)
+    for sentence in sentences:
+        if marketing.search(sentence) or not design_context.search(sentence):
+            continue
+        # A long general description is not reliable pattern evidence.
+        if len(sentence) > 400:
+            continue
+        matches = [name for name, rx in PATTERNS.items() if re.search(rx, sentence, re.I)]
+        if not matches:
+            continue
+        if len(matches) != 1:
+            return '', '', 'multiple_description_patterns'
+        pattern = matches[0]
+        if pattern == 'Striped' and re.search(r'\b(?:flag|patriotic|stars and stripes)\b', sentence, re.I):
+            return '', '', 'description_flag_stripes_ambiguous'
+        found.append((pattern, sentence.strip()))
+    if not found:
+        return '', '', 'pattern_not_explicit_in_title_or_description'
+    if len(set(p for p, _ in found)) != 1:
+        return '', '', 'multiple_description_patterns'
+    pattern, evidence = found[0]
+    return pattern, 'shopify_description: ' + evidence[:240], ''
 
 def extract(title, description, variant_style='', selected_color='', shopify_title=''):
     """Conservative candidates, never automatic approval. Evidence must be auditable."""
@@ -110,8 +149,13 @@ def extract(title, description, variant_style='', selected_color='', shopify_tit
     elif len(patterns) > 1:
         reasons.append('multiple_patterns_no_primary')
     else:
-        # Pattern cannot be inferred from generic marketing text.
-        reasons.append('pattern_not_explicit_in_title')
+        # Title has no explicit pattern; extract only from credible design-specific description statements.
+        pat, pat_evidence, warning = description_pattern_candidates(description)
+        if pat:
+            result['proposed_pattern'] = pat
+            result['pattern_evidence'] = pat_evidence
+        elif warning:
+            reasons.append(warning)
     compositions = list(re.finditer(r'\b\d{1,3}\s*%\s*' + FABRIC + r'\b', description, re.I))
     labeled = list(re.finditer(r'\b(?:material|fabric composition|main fabric composition)\s*[:=-]\s*(' + FABRIC + r')\b', description, re.I))
     all_fabrics = set(x.casefold() for x in re.findall(r'\b' + FABRIC + r'\b', description, re.I))
@@ -251,6 +295,9 @@ class Reporter:
             elif key=='pattern' and evidence.startswith('shopify_product_title: '):
                 qa[key]='PATTERN_TITLE_VERIFIED'
                 approved[key]=proposal
+            elif key=='pattern' and evidence.startswith('shopify_description: '):
+                qa[key]='PATTERN_DESCRIPTION_REVIEW'
+                reasons.append('pattern_description_requires_qa')
             else:
                 qa[key]='NEEDS_REVIEW'
         has_proposal=any(proposals.values())
@@ -286,7 +333,7 @@ class Reporter:
     def summary(self,**metadata):
         result=dict(self.counts)
         result.update(metadata)
-        result.update({'mode':'READ_ONLY','auto_fix_eligible':0,'qa_policy':'TITLE_APPROVED_READ_ONLY_MATERIAL_REVIEW'})
+        result.update({'mode':'READ_ONLY','auto_fix_eligible':0,'qa_policy':'TITLE_APPROVED_DESCRIPTION_PATTERN_REVIEW_MATERIAL_REVIEW'})
         atomic_json(self.out/'summary.json',result)
         return result
 

@@ -50,3 +50,32 @@ python -m unittest discover -s tests -v
 - Material must be subtype validated before any write. Even `Material: Polyester` in shared description isn't enough alone.
 - Two legacy Offer ID shapes from earlier audits remain unmatched, do not generate candidates for them.
 - Do not delete the GMC `One Color` attribute rule yet. Such a rule may override future supplemental attributes; resolve only at the controlled write stage.
+
+## Fabric Composition Master mapping (user-supplied, read-only add-on)
+
+* `material_master.csv`: 56 style-to-fabric rows transcribed from the user's uploaded "Fabric Composition - Sheet1.csv". Original composition strings kept verbatim (notably `Cotton` does **not** imply `100% Cotton`).
+* `material_aliases.csv`: limited explicit name-normalization aliases only. New unknown styles are not inferred.
+* `material_rules.py`: post-processes *cumulative* `out/audit.csv` after each run and writes `out/material_mapping_review.csv`, `out/material_master_candidates.csv`, `out/material_mapping_summary.json`. Does **not** change the existing audit CSV schema or checkpoint schema 3 and **never** calls GMC write endpoints.
+* The GitHub workflow calls `material_rules.py` after the main read-only audit. Existing cached `out/` (7 pages) is preserved on Resume.
+* Compound styles such as `Long sleeves UPF + Face shield` are sent for review. A generic `Hoodie` is `Cotton`; `220g air layer Hoodie` is `100% polyester`. Generic `Zip up hoodie` is not assumed to be the 220g variant.
+* Master candidates need a final review of the user's intended variant nomenclature prior to any GMC supplemental feed writes.
+
+### Local reprocess without calling APIs
+
+```bash
+python material_rules.py --audit /path/to/audit.csv --out out
+```
+
+### Resume on GitHub
+
+Keep `scan_mode=resume`, `page_size=500` to continue the existing scan. The workflow name changes, but the cache key prefix remains `gmc-v13-`, so the 7-page state can be restored. No change to `engine.py` or `live.py` is required.
+
+
+## Pattern Description fallback (V1.3.1)
+
+- Priority: verified Shopify Product Title first, verified Shopify native Product Description second.
+- Only explicit pattern names in design-related statements can create a description-derived proposal.
+- A description-derived pattern is marked `PATTERN_DESCRIPTION_REVIEW` and **approved_pattern remains blank** until QA. Title-derived patterns retain `PATTERN_TITLE_VERIFIED`.
+- General marketing text, multiple conflicting patterns, vague `Printed`, and ambiguous flag stripes are not inferred. `Argyle` is now supported.
+- The existing audit CSV columns and checkpoint schema stay unchanged, so `resume` continues safely. **Important: previously saved rows are not retroactively re-extracted, and the historic audit CSV does not store full Shopify descriptions.** To apply the new fallback to older 3,500 rows, perform a deliberate fresh scan or implement a separate Shopify re-enrichment pass; do not expect `resume` to recalculate old rows.
+- Fabric rules remain read-only. Also includes the previously user-confirmed mapping of `Women's Short Sleeve Quarter-Zip` variants to `Women Quarter Zip` (100% polyester).

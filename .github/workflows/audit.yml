@@ -1,4 +1,4 @@
-name: GMC Attributes V1.3 Read-Only Audit
+name: GMC Attributes V1.3 + Fabric Master Read-Only
 on:
   workflow_dispatch:
     inputs:
@@ -75,6 +75,9 @@ jobs:
           else
             python engine.py audit-live --page-size "$PAGE_SIZE" --max-pages "$MAX_PAGES" --out out
           fi
+      - name: Apply user Fabric Composition mapping (read-only)
+        if: always() && hashFiles('out/audit.csv') != ''
+        run: python material_rules.py --audit out/audit.csv --out out
       - name: Save snapshot for next run
         if: always() && hashFiles('out/checkpoint.json') != ''
         uses: actions/cache/save@v4

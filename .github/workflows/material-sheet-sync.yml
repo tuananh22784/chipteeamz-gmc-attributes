@@ -1,0 +1,65 @@
+name: GMC Material Employee Google Sheets Sync (Read Only)
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '25 7 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: gmc-v13-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Validate code
+        run: python -m unittest discover -s tests -q
+      - name: Restore existing scan (no GMC page)
+        uses: actions/cache/restore@v4
+        with:
+          path: out/
+          key: gmc-v13-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            gmc-v13-${{ github.ref_name }}-
+      - name: Sync confirmed material and rebuild audit
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/merchant-credentials.json
+          MERCHANT_SERVICE_ACCOUNT_JSON: ${{ secrets.MERCHANT_SERVICE_ACCOUNT_JSON }}
+          MATERIAL_SHEET_ID: ${{ secrets.MATERIAL_SHEET_ID }}
+        run: |
+          set -euo pipefail
+          test -s out/audit.csv && test -s out/checkpoint.json
+          test -n "$MERCHANT_SERVICE_ACCOUNT_JSON" && test -n "$MATERIAL_SHEET_ID"
+          printf '%s' "$MERCHANT_SERVICE_ACCOUNT_JSON" > merchant-credentials.json
+          chmod 600 merchant-credentials.json
+          trap 'rm -f merchant-credentials.json' EXIT
+          python material_sheet_sync.py --out out
+          python - <<'PY'
+          import csv,json
+          cp=json.load(open('out/checkpoint.json'))
+          with open('out/audit.csv',encoding='utf-8-sig',newline='') as f: rows=list(csv.DictReader(f))
+          assert len(rows)==cp['scanned']==len({r['id'] for r in rows})
+          assert json.load(open('out/summary.json'))['auto_fix_eligible']==0
+          PY
+      - name: Save audit snapshot
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: out/
+          key: gmc-v13-${{ github.ref_name }}-${{ github.run_id }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gmc-material-sheet-${{ github.run_id }}
+          path: |
+            out/material_sheet_sync_summary.json
+            out/sheet_approved_rules.csv
+            out/audit.csv
+            out/summary.json
+          retention-days: 14

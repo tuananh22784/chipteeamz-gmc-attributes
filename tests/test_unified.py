@@ -62,7 +62,35 @@ class UnifiedRuleTests(unittest.TestCase):
 
     def test_bare_cycling_jersey_not_polo(self):
         x=unified_rules.augment(self.row('Men Short Sleeve Jersey'),self.rules)
-        self.assertEqual(x['material_decision'],'CONFLICTING_PRODUCT_FAMILY')
+        self.assertEqual(x['approved_material'],'96% polyester, 4% spandex')
+
+    def test_extra_17_confirmations(self):
+        self.assertEqual(len(self.rules[5]),17)
+        expected={
+           'Women Long Sleeve Jersey':'96% polyester, 4% spandex',
+           'Women Short Sleeve Jersey':'96% polyester, 4% spandex',
+           'Men Short Sleeve Jersey':'96% polyester, 4% spandex',
+           'Hat BWB':'100% polyester',
+           'Zip - Up Hoodie':'100% polyester',
+           "Kids' Long Sleeve UPF":'100% polyester',
+        }
+        for style,material in expected.items():
+            with self.subTest(style=style):
+                self.assertEqual(unified_rules.augment(self.row(style),self.rules)['approved_material'],material)
+
+    def test_item_scoped_confirmation(self):
+        self.assertEqual(unified_rules.augment(self.row('Kid','shopify_US_7491031793762_42435647701090'),self.rules)['approved_material'],'100% polyester')
+        self.assertEqual(unified_rules.augment(self.row('Kid','shopify_US_1_2'),self.rules)['approved_material'],'')
+
+    def test_premium_tee_color_variant(self):
+        for color,material in [('Black','100% cotton'),('Ash Grey','99% cotton, 1% polyester'),('Heather Grey','90% cotton, 10% polyester'),('Heather Navy','52% cotton, 48% polyester')]:
+            with self.subTest(color=color):
+                x=unified_rules.augment(self.row('Unisex Premium T-shirt',variant_options='Style:Unisex Premium T-shirt / Color:'+color+' / Size:M'),self.rules)
+                self.assertEqual(x['approved_material'],material)
+
+    def test_pending_sweatshirt_not_guessed(self):
+        x=unified_rules.augment(self.row('Female','shopify_US_6584942887010_39394465480802'),self.rules)
+        self.assertEqual(x['approved_material'],'')
 
     def test_keeps_existing_material(self):
         x=unified_rules.augment(self.row('Hoodie',current_material='Linen'),self.rules)

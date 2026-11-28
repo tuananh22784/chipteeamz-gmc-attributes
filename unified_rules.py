@@ -344,11 +344,26 @@ def augment(row,rules,evidence=None,shirt_evidence=None):
     row=dict(row)
     m,composition=material_assessment(row,rules,evidence,shirt_evidence)
     row.update(m)
+    # Employee confirmations persisted in Google Sheets always take precedence over
+    # speculative mappings, but not over an existing GMC material or an unverified item.
+    staff=getattr(augment,'staff_rules',{})
+    item_rule=staff.get('ITEM:'+str(row.get('id','')))
+    style_key='STYLE:'+normalized(row.get('style_resolved') or row.get('variant_style') or '')
+    style_rule=staff.get(style_key)
+    rule=item_rule or style_rule
+    if rule and row.get('shopify_status')=='SHOPIFY_VERIFIED' and not row.get('current_material'):
+        composition=rule['confirmed_material']
+        row.update({'material_rule_id':rule['rule_key'],'material_source':'GOOGLE_SHEETS_STAFF',
+                    'material_matched_subtype':rule['confirmed_style'],
+                    'material_decision':'STAFF_APPROVED_READ_ONLY',
+                    'material_reason':'STAFF_CONFIRMATION:'+rule['scope']})
+        m['material_matched_subtype']=rule['confirmed_style']
+        m['material_rule_id']=rule['rule_key']
     if row.get('current_material') or row.get('shopify_status')!='SHOPIFY_VERIFIED':
         row['approved_material']=''
     elif composition:
         row['proposed_material']=composition
-        row['material_evidence']='USER_FABRIC_COMPOSITION_MASTER: '+m['material_matched_subtype']+' ('+m['material_rule_id']+')'
+        row['material_evidence']=row.get('material_source','USER_FABRIC_COMPOSITION_MASTER')+': '+m['material_matched_subtype']+' ('+m['material_rule_id']+')'
         row['approved_material']=composition
         row['material_qa']='MATERIAL_MASTER_VERIFIED'
         stale={'material_not_explicit_or_ambiguous','material_needs_review','material_unknown','material_unverified'}
@@ -379,6 +394,16 @@ def rebuild(out,only_migrate=False):
     if not src.exists():
         raise ValueError('Expected existing audit.csv; cannot rebuild')
     rules=rulebook()
+    staff_path=out/'sheet_approved_rules.csv'
+    staff={}
+    if staff_path.exists():
+        for rule in read_csv(staff_path):
+            k=rule.get('rule_key','')
+            if not k or not rule.get('confirmed_material'):continue
+            if k in staff and staff[k]['confirmed_material']!=rule['confirmed_material']:
+                raise ValueError('Conflicting staff material rule: '+k)
+            staff[k]=rule
+    augment.staff_rules=staff
     evidence=description_evidence(out)
     shirt_evidence=shirt_jersey_evidence(out)
     alias_review=out/'style_alias_validation.csv'

@@ -106,6 +106,25 @@ jobs:
           chmod 600 merchant-credentials.json
           trap 'rm -f merchant-credentials.json' EXIT
           python material_sheet_sync.py --out out
+      - name: Refetch Color and Pattern Shopify evidence (max 300 items)
+        if: ${{ success() && inputs.scan_mode == 'resume' }}
+        env:
+          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+        run: python refetch_color_pattern.py --out out --limit 500
+      - name: Apply staff-approved Color and Pattern in Google Sheets
+        if: ${{ success() }}
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/merchant-credentials.json
+          MERCHANT_SERVICE_ACCOUNT_JSON: ${{ secrets.MERCHANT_SERVICE_ACCOUNT_JSON }}
+          MATERIAL_SHEET_ID: ${{ secrets.MATERIAL_SHEET_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MATERIAL_SHEET_ID:-}" ]; then echo 'Skip Google Sheets'; exit 0; fi
+          printf '%s' "$MERCHANT_SERVICE_ACCOUNT_JSON" > merchant-credentials.json
+          chmod 600 merchant-credentials.json
+          trap 'rm -f merchant-credentials.json' EXIT
+          python attribute_sheet_sync.py --out out
       - name: Save snapshot for next run
         if: always() && hashFiles('out/checkpoint.json') != ''
         uses: actions/cache/save@v4

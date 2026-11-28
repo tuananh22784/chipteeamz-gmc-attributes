@@ -1,4 +1,4 @@
-name: GMC Material Employee Google Sheets Sync (Read Only)
+name: GMC Attributes Employee Google Sheets Sync (Read Only)
 on:
   workflow_dispatch:
   schedule:
@@ -47,6 +47,22 @@ jobs:
           assert len(rows)==cp['scanned']==len({r['id'] for r in rows})
           assert json.load(open('out/summary.json'))['auto_fix_eligible']==0
           PY
+      - name: Refetch verified Shopify Color and Pattern evidence (max 300 items)
+        env:
+          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+        run: python refetch_color_pattern.py --out out --limit 500
+      - name: Sync confirmed Color and Pattern in same Google Sheet
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/merchant-credentials.json
+          MERCHANT_SERVICE_ACCOUNT_JSON: ${{ secrets.MERCHANT_SERVICE_ACCOUNT_JSON }}
+          MATERIAL_SHEET_ID: ${{ secrets.MATERIAL_SHEET_ID }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$MERCHANT_SERVICE_ACCOUNT_JSON" > merchant-credentials.json
+          chmod 600 merchant-credentials.json
+          trap 'rm -f merchant-credentials.json' EXIT
+          python attribute_sheet_sync.py --out out
       - name: Save audit snapshot
         if: success()
         uses: actions/cache/save@v4
@@ -59,6 +75,9 @@ jobs:
           name: gmc-material-sheet-${{ github.run_id }}
           path: |
             out/material_sheet_sync_summary.json
+            out/attribute_sheet_sync_summary.json
+            out/attribute_shopify_refetch_summary.json
+            out/sheet_approved_attribute_rules.csv
             out/sheet_approved_rules.csv
             out/audit.csv
             out/summary.json

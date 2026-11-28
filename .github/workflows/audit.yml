@@ -106,7 +106,7 @@ jobs:
           chmod 600 merchant-credentials.json
           trap 'rm -f merchant-credentials.json' EXIT
           python material_sheet_sync.py --out out
-      - name: Refetch Color and Pattern Shopify evidence (max 300 items)
+      - name: Refetch Color and Pattern Shopify evidence (max 500 items)
         if: ${{ success() && inputs.scan_mode == 'resume' }}
         env:
           SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}

@@ -86,11 +86,12 @@ def explicit_pattern_title(title):
             matches.append(name)
     return matches[0] if len(matches)==1 else ''
 
-def strict_auto_candidates(rows,evidence):
+def strict_auto_candidates(rows,evidence,trace=None):
     """Auto approve only explicit garment color or explicitly labeled pattern.
     Check source IDs and avoid overwriting existing values.
     """
     result={'COLOR':0,'PATTERN':0}
+    if trace is None:trace={}
     for r in rows:
         e=evidence.get(r['id'],{})
         if r.get('shopify_status')!='SHOPIFY_VERIFIED' or e.get('evidence_status')!='VERIFIED':continue
@@ -102,6 +103,7 @@ def strict_auto_candidates(rows,evidence):
                 r['approved_color']=value;r['proposed_color']=value
                 r['color_qa']='COLOR_EXPLICIT_DESCRIPTION_VERIFIED'
                 r['color_evidence']='SHOPIFY_DESCRIPTION_EXPLICIT_GARMENT_COLOR'
+                trace[(r['id'],'COLOR')]={'evidence_source':'DESCRIPTION','evidence_text':explicit_color_field_evidence(desc), 'rule_id':'COLOR_GARMENT_LABEL_V1351'}
                 clear_stale_reason(r,'COLOR');result['COLOR']+=1
         if is_missing(r,'PATTERN'):
             from_desc=explicit_pattern_description(desc)
@@ -110,14 +112,83 @@ def strict_auto_candidates(rows,evidence):
             if from_title and from_desc and from_title!=from_desc:value=''
             if value and SAFE_PATTERN.fullmatch(value):
                 r['approved_pattern']=value;r['proposed_pattern']=value
-                r['pattern_qa']='PATTERN_EXPLICIT_DESCRIPTION_VERIFIED'
+                r['pattern_qa']='PATTERN_EXPLICIT_TITLE_VERIFIED' if from_title else 'PATTERN_EXPLICIT_DESCRIPTION_VERIFIED'
                 r['pattern_evidence']='SHOPIFY_TITLE_EXPLICIT_PATTERN' if from_title else 'SHOPIFY_DESCRIPTION_EXPLICIT_PATTERN_FIELD'
+                trace[(r['id'],'PATTERN')]={'evidence_source':'TITLE' if from_title else 'DESCRIPTION',
+                    'evidence_text':e.get('shopify_title','')[:500] if from_title else explicit_pattern_field_evidence(desc),
+                    'rule_id':'PATTERN_EXPLICIT_TITLE_V1351' if from_title else 'PATTERN_LABELED_DESCRIPTION_V1351'}
                 clear_stale_reason(r,'PATTERN');result['PATTERN']+=1
     return result
+
+def explicit_color_field_evidence(description):
+    text=plain(description)
+    m=re.search(r'(?i)\b(?:shirt color|garment color|base color|fabric color|color of (?:the )?(?:shirt|garment))\s*[:=-]\s*([^.;\n]{1,75})',text)
+    return m.group(0)[:300] if m else ''
+
+def explicit_pattern_field_evidence(description):
+    text=plain(description)
+    m=re.search(r'(?i)(?:^|[.;])\s*(?:fabric\s+)?(?:design\s+)?pattern\s*[:=-]\s*([^.;]{1,90})',text)
+    return m.group(0).strip()[:300] if m else ''
+
+def validate_auto_evidence(rows,changes):
+    by_id={r['id']:r for r in rows}
+    expected={
+      'PATTERN_EXPLICIT_TITLE_VERIFIED':('TITLE','SHOPIFY_TITLE_EXPLICIT_PATTERN','PATTERN_EXPLICIT_TITLE_V1351'),
+      'PATTERN_EXPLICIT_DESCRIPTION_VERIFIED':('DESCRIPTION','SHOPIFY_DESCRIPTION_EXPLICIT_PATTERN_FIELD','PATTERN_LABELED_DESCRIPTION_V1351'),
+      'COLOR_EXPLICIT_DESCRIPTION_VERIFIED':('DESCRIPTION','SHOPIFY_DESCRIPTION_EXPLICIT_GARMENT_COLOR','COLOR_GARMENT_LABEL_V1351'),
+      'COLOR_SHOPIFY_VARIANT_REFETCH_VERIFIED':('VARIANT','SHOPIFY_VERIFIED_VARIANT_COLOR','COLOR_EXACT_VARIANT_V1351'),
+    }
+    for change in changes:
+        status=change.get('qa_status','')
+        if status not in expected:continue  # leave prior approved rules untouched
+        source,prefix,rule=expected[status]
+        if change.get('evidence_source')!=source or change.get('rule_id')!=rule or not change.get('evidence_text'):
+            raise ValueError('AUTO_EVIDENCE_MISMATCH '+change['item_id']+' '+status)
+        row=by_id[change['item_id']]
+        attr=change['attribute'].lower()
+        if row.get(attr+'_evidence','').split(':')[0]!=prefix:
+            raise ValueError('AUTO_EVIDENCE_STATUS_MISMATCH '+change['item_id'])
+        if row.get('approved_'+attr)!=change.get('new_value'):
+            raise ValueError('AUTO_EVIDENCE_VALUE_MISMATCH '+change['item_id'])
 
 def evidence_map(out):
     path=Path(out)/'attribute_shopify_evidence.csv'
     return {r['item_id']:r for r in load_csv(path)} if path.exists() else {}
+
+def reconcile_legacy_pattern_source(rows,evidence):
+    """Resolve only V1.3.5's known Title/Description label mismatch.
+
+    Existing unrelated approvals are never re-evaluated. Missing original Shopify
+    evidence is a review condition, never an assumed approval.
+    """
+    report=[]
+    for r in rows:
+        if (r.get('pattern_qa')!='PATTERN_EXPLICIT_DESCRIPTION_VERIFIED'
+            or r.get('pattern_evidence')!='SHOPIFY_TITLE_EXPLICIT_PATTERN'
+            or not r.get('approved_pattern')):continue
+        e=evidence.get(r['id'],{})
+        valid=(e.get('evidence_status')=='VERIFIED'
+               and str(e.get('product_id'))==str(r.get('shopify_product_id'))
+               and str(e.get('variant_id'))==str(r.get('shopify_variant_id')))
+        explicit=explicit_pattern_title(e.get('shopify_title','')) if valid else ''
+        matched=explicit and norm(explicit)==norm(r.get('approved_pattern'))
+        if matched:
+            r['pattern_qa']='PATTERN_EXPLICIT_TITLE_VERIFIED'
+            decision='REPAIRED_LABEL_WITH_SHOPIFY_TITLE'
+        else:
+            r['proposed_pattern']=r.get('approved_pattern','')
+            r['approved_pattern']=''
+            r['pattern_qa']='PATTERN_SOURCE_RECHECK_REQUIRED'
+            reason='pattern_source_recheck_required'
+            reasons=[x.strip() for x in r.get('review_reason','').split(';') if x.strip()]
+            if reason not in reasons:reasons.append(reason)
+            r['review_reason']='; '.join(reasons)
+            decision='QUARANTINED_UNVERIFIED_TITLE_SOURCE'
+        report.append({'item_id':r['id'],'previous_qa':'PATTERN_EXPLICIT_DESCRIPTION_VERIFIED',
+                       'decision':decision,'expected_pattern':r.get('proposed_pattern',''),
+                       'shopify_title':e.get('shopify_title','') if valid else '',
+                       'shopify_evidence_verified':bool(valid)})
+    return report
 
 def build_pending(rows,attribute,old=(),rules=(),evidence=None):
     evidence=evidence or {}
@@ -215,9 +286,10 @@ def apply_rules(rows,rules):
                 row[key+'_evidence']='GOOGLE_SHEETS_STAFF: '+k;clear_stale_reason(row,a);changed+=1
     return changed
 
-def auto_apply_verified_color(rows,evidence):
+def auto_apply_verified_color(rows,evidence,trace=None):
     """A real Shopify Color option is authoritative. Never interpret artwork color."""
     changed=0
+    if trace is None:trace={}
     for row in rows:
         if row.get('shopify_status')!='SHOPIFY_VERIFIED' or not is_missing(row,'COLOR'):continue
         e=evidence.get(row['id'],{})
@@ -228,6 +300,7 @@ def auto_apply_verified_color(rows,evidence):
         row['proposed_color']=color;row['approved_color']=color
         row['color_qa']='COLOR_SHOPIFY_VARIANT_REFETCH_VERIFIED'
         row['color_evidence']='SHOPIFY_VERIFIED_VARIANT_COLOR: '+color
+        trace[(row['id'],'COLOR')]={'evidence_source':'VARIANT','evidence_text':'Color: '+color,'rule_id':'COLOR_EXACT_VARIANT_V1351'}
         clear_stale_reason(row,'COLOR')
         changed+=1
     return changed
@@ -336,16 +409,22 @@ def sync(out,sheet_id=None,local=False):
 
     export_csv(out/'sheet_approved_attribute_rules.csv',rules,RULE_FIELDS)
     evidence=evidence_map(out)
+    source_repair=reconcile_legacy_pattern_source(rows,evidence)
+    export_csv(out/'legacy_pattern_source_reconciliation.csv',source_repair,
+               ['item_id','previous_qa','decision','expected_pattern','shopify_title','shopify_evidence_verified'])
     prior={(r['id'],a):r.get('approved_'+a,'') for r in rows for a in ('color','pattern')}
-    auto_count=auto_apply_verified_color(rows,evidence)
-    strict_count=strict_auto_candidates(rows,evidence)
+    trace={}
+    auto_count=auto_apply_verified_color(rows,evidence,trace)
+    strict_count=strict_auto_candidates(rows,evidence,trace)
     new_count=apply_rules(rows,rules)
     changes=[{'item_id':r['id'],'attribute':a.upper(),'previous':prior[(r['id'],a)],
-              'new_value':r.get('approved_'+a,''),'qa_status':r.get(a+'_qa',''),'evidence':r.get(a+'_evidence','')}
+              'new_value':r.get('approved_'+a,''),'qa_status':r.get(a+'_qa',''),'evidence':r.get(a+'_evidence',''),
+              **trace.get((r['id'],a.upper()),{'evidence_source':'PREEXISTING_OR_STAFF','evidence_text':r.get(a+'_evidence',''),'rule_id':'EXTERNAL_RULE'})}
              for r in rows for a in ('color','pattern')
              if not prior[(r['id'],a)] and r.get('approved_'+a)]
+    validate_auto_evidence(rows,changes)
     export_csv(out/'attribute_auto_approval_evidence.csv',changes,
-               ['item_id','attribute','previous','new_value','qa_status','evidence'])
+               ['item_id','attribute','previous','new_value','qa_status','evidence','evidence_source','evidence_text','rule_id'])
     save_audit(out,rows);recompute_summaries(out,rows)
     for a in ATTRIBUTES:
         newly=build_pending(rows,a,rest[a],rules,evidence)
@@ -353,6 +432,8 @@ def sync(out,sheet_id=None,local=False):
         else:reconcile_pending(sheet,TAB_PENDING[a],snapshots[a],newly,PENDING_FIELDS)
         stats[a]['pending_after']=len(newly)
     stats.update({'rules_total':len(rules),'applied_staff_updates':new_count,'auto_verified_variant_colors':auto_count,'auto_verified_explicit_description':strict_count,'evidence_cached':len(evidence),'newly_approved_attributes':len(changes),
+                  'legacy_pattern_source_reconciled':sum(x['decision']=='REPAIRED_LABEL_WITH_SHOPIFY_TITLE' for x in source_repair),
+                  'legacy_pattern_source_quarantined':sum(x['decision']=='QUARANTINED_UNVERIFIED_TITLE_SOURCE' for x in source_repair),
                   'still_waiting_shopify_check':{a:sum(is_missing(r,a) and r.get('shopify_status')=='SHOPIFY_VERIFIED' and r['id'] not in evidence for r in rows) for a in ATTRIBUTES},'gmc_write':False})
     (out/'attribute_sheet_sync_summary.json').write_text(json.dumps(stats,indent=2),encoding='utf-8')
     return stats

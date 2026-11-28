@@ -9,6 +9,8 @@ import argparse,csv,datetime,html,json,os,re
 from pathlib import Path
 from material_sheet_sync import GoogleSheets,load_csv,export_csv
 from engine import color_mentions,description_pattern_candidates,PATTERNS,plain,is_missing_color
+from color_title_rules import apply_title_color
+from pattern_title_description_rules import apply_pattern_fallback
 
 PENDING_FIELDS=['item_id','product_id','variant_id','product_title','variant_options','attribute','current_value','suggested_value','evidence','evidence_source','scope','confirmed_value','staff_note','status','validation_message']
 RULE_FIELDS=['rule_key','attribute','scope','item_id','product_id','confirmed_value','source','approved_at']
@@ -134,15 +136,19 @@ def validate_auto_evidence(rows,changes):
     by_id={r['id']:r for r in rows}
     expected={
       'PATTERN_EXPLICIT_TITLE_VERIFIED':('TITLE','SHOPIFY_TITLE_EXPLICIT_PATTERN','PATTERN_EXPLICIT_TITLE_V1351'),
+      'PATTERN_GMC_TITLE_VERIFIED':('GMC_TITLE','GMC_TITLE_PATTERN','PATTERN_TITLE_DESC_V1353'),
+      'PATTERN_SHOPIFY_TITLE_VERIFIED':('SHOPIFY_TITLE','SHOPIFY_TITLE_PATTERN','PATTERN_TITLE_DESC_V1353'),
+      'PATTERN_DESIGN_DESCRIPTION_VERIFIED':('SHOPIFY_DESCRIPTION','SHOPIFY_DESCRIPTION_PATTERN','PATTERN_TITLE_DESC_V1353'),
       'PATTERN_EXPLICIT_DESCRIPTION_VERIFIED':('DESCRIPTION','SHOPIFY_DESCRIPTION_EXPLICIT_PATTERN_FIELD','PATTERN_LABELED_DESCRIPTION_V1351'),
       'COLOR_EXPLICIT_DESCRIPTION_VERIFIED':('DESCRIPTION','SHOPIFY_DESCRIPTION_EXPLICIT_GARMENT_COLOR','COLOR_GARMENT_LABEL_V1351'),
       'COLOR_SHOPIFY_VARIANT_REFETCH_VERIFIED':('VARIANT','SHOPIFY_VERIFIED_VARIANT_COLOR','COLOR_EXACT_VARIANT_V1351'),
+      'COLOR_TITLE_VERIFIED':('TITLE','SHOPIFY_OR_GMC_TITLE_COLOR',None),
     }
     for change in changes:
         status=change.get('qa_status','')
         if status not in expected:continue  # leave prior approved rules untouched
         source,prefix,rule=expected[status]
-        if change.get('evidence_source')!=source or change.get('rule_id')!=rule or not change.get('evidence_text'):
+        if change.get('evidence_source')!=source or (rule is not None and change.get('rule_id')!=rule) or not change.get('evidence_text'):
             raise ValueError('AUTO_EVIDENCE_MISMATCH '+change['item_id']+' '+status)
         row=by_id[change['item_id']]
         attr=change['attribute'].lower()
@@ -416,6 +422,12 @@ def sync(out,sheet_id=None,local=False):
     trace={}
     auto_count=auto_apply_verified_color(rows,evidence,trace)
     strict_count=strict_auto_candidates(rows,evidence,trace)
+    title_count,title_decisions=apply_title_color(rows,evidence,trace)
+    fallback_count,pattern_decisions=apply_pattern_fallback(rows,evidence,trace)
+    export_csv(out/'pattern_title_description_decisions.csv',pattern_decisions,['item_id','decision','pattern','source','evidence_text'])
+    export_csv(out/'color_title_rule_decisions.csv',
+        [{'item_id':a,'approved_color':b,'decision':c,'title_evidence':d} for a,b,c,d in title_decisions],
+        ['item_id','approved_color','decision','title_evidence'])
     new_count=apply_rules(rows,rules)
     changes=[{'item_id':r['id'],'attribute':a.upper(),'previous':prior[(r['id'],a)],
               'new_value':r.get('approved_'+a,''),'qa_status':r.get(a+'_qa',''),'evidence':r.get(a+'_evidence',''),
@@ -431,7 +443,7 @@ def sync(out,sheet_id=None,local=False):
         if local:write(TAB_PENDING[a],newly,PENDING_FIELDS)
         else:reconcile_pending(sheet,TAB_PENDING[a],snapshots[a],newly,PENDING_FIELDS)
         stats[a]['pending_after']=len(newly)
-    stats.update({'rules_total':len(rules),'applied_staff_updates':new_count,'auto_verified_variant_colors':auto_count,'auto_verified_explicit_description':strict_count,'evidence_cached':len(evidence),'newly_approved_attributes':len(changes),
+    stats.update({'rules_total':len(rules),'applied_staff_updates':new_count,'auto_verified_variant_colors':auto_count,'auto_verified_title_colors':title_count,'auto_verified_pattern_fallback':fallback_count,'auto_verified_explicit_description':strict_count,'evidence_cached':len(evidence),'newly_approved_attributes':len(changes),
                   'legacy_pattern_source_reconciled':sum(x['decision']=='REPAIRED_LABEL_WITH_SHOPIFY_TITLE' for x in source_repair),
                   'legacy_pattern_source_quarantined':sum(x['decision']=='QUARANTINED_UNVERIFIED_TITLE_SOURCE' for x in source_repair),
                   'still_waiting_shopify_check':{a:sum(is_missing(r,a) and r.get('shopify_status')=='SHOPIFY_VERIFIED' and r['id'] not in evidence for r in rows) for a in ATTRIBUTES},'gmc_write':False})

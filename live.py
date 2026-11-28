@@ -74,7 +74,7 @@ def shopify_descriptions(rows):
     # Query exact product and exact variant nodes, independently; avoid paginating first N variants.
     query = '''query($ids: [ID!]!) {
       nodes(ids: $ids) {
-        ... on Product { __typename id legacyResourceId title descriptionHtml }
+        ... on Product { __typename id legacyResourceId title descriptionHtml productType }
         ... on ProductVariant { __typename id legacyResourceId product { legacyResourceId } selectedOptions { name value } }
       }
     }'''
@@ -105,6 +105,7 @@ def shopify_descriptions(rows):
             item['_shopify_status'] = 'SHOPIFY_VERIFIED'
             item.setdefault('productAttributes', {})['description'] = product.get('descriptionHtml') or ''
             item['_shopify_title'] = product.get('title') or ''
+            item['_shopify_product_type'] = product.get('productType') or ''
             item['_variant_style'] = ' / '.join(styles)
             item['_selected_color'] = colors[0] if len(colors) == 1 else ''
             item['_variant_options'] = ' / '.join(str(o.get('name', '')) + ':' + str(o.get('value', '')) for o in variant.get('selectedOptions', []))

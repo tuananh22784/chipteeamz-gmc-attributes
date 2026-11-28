@@ -25,6 +25,7 @@ REVIEW_FIELDS = ['variant_style','confirmation','example_item_id','handling','re
                  'resolved_material','rule_id','decision','note']
 BASE_OUTPUTS = ['audit','approved_attributes','ready_for_qa','needs_review','candidates_review','auto_fix_eligible']
 DESCRIPTION_EVIDENCE='style_description_evidence.csv'
+SHIRT_JERSEY_EVIDENCE='shirt_jersey_style_evidence.csv'
 MATERIAL_REPORT_FIELDS=['id','language','feed_label','shopify_status','variant_style','current_material',
                         'matched_subtype','material_rule_id','material_source','material_candidate','material_decision','material_reason',
                         'material_component_1','material_component_2',
@@ -203,7 +204,17 @@ def description_evidence(out):
     return result
 
 
-def material_assessment(row, rules, evidence=None):
+def shirt_jersey_evidence(out):
+    result={}
+    path=Path(out)/SHIRT_JERSEY_EVIDENCE
+    if path.exists():
+        for x in read_csv(path):
+            if x.get('status')=='SHOPIFY_VERIFIED' and x.get('decision')=='EXPLICIT_STYLE' and x.get('resolved_style'):
+                result[x['id']]=x
+    return result
+
+
+def material_assessment(row, rules, evidence=None, shirt_evidence=None):
     master,aliases,_,scoped,color_dependent,_=rules
     current=(row.get('current_material') or '').strip()
     style=(row.get('variant_style') or '').strip()
@@ -243,8 +254,21 @@ def material_assessment(row, rules, evidence=None):
                               'style_resolved':style})
         else:
             if status not in ('TITLE_EXPLICIT','TITLE_EXPLICIT_USER_POLO_RULE'):
-                return finish('REVIEW_MISSING_STYLE','No safe title mapping: '+status+'; '+title_evidence)
-            style=inferred
+                ev=(shirt_evidence or {}).get(row.get('id'))
+                if (status in ('TITLE_INSUFFICIENT','AMBIGUOUS_JERSEY') and ev
+                    and ev.get('shopify_product_id')==row.get('shopify_product_id')
+                    and ev.get('shopify_variant_id')==row.get('shopify_variant_id')
+                    and ev.get('status')=='SHOPIFY_VERIFIED'
+                    and ev.get('decision')=='EXPLICIT_STYLE'):
+                    style=ev['resolved_style']
+                    value.update({'style_resolution_source':'SHOPIFY_EXACT_VARIANT_REFETCH',
+                                  'style_resolution_status':'REFETCH_EXPLICIT_STYLE',
+                                  'style_resolution_evidence':ev.get('evidence_excerpt',''),
+                                  'style_resolved':style})
+                else:
+                    return finish('REVIEW_MISSING_STYLE','No safe title mapping: '+status+'; '+title_evidence)
+            else:
+                style=inferred
 
     norm=normalized(style)
     if row.get('id') in scoped:
@@ -316,9 +340,9 @@ def material_assessment(row, rules, evidence=None):
     return value,composition
 
 
-def augment(row,rules,evidence=None):
+def augment(row,rules,evidence=None,shirt_evidence=None):
     row=dict(row)
-    m,composition=material_assessment(row,rules,evidence)
+    m,composition=material_assessment(row,rules,evidence,shirt_evidence)
     row.update(m)
     if row.get('current_material') or row.get('shopify_status')!='SHOPIFY_VERIFIED':
         row['approved_material']=''
@@ -356,6 +380,7 @@ def rebuild(out,only_migrate=False):
         raise ValueError('Expected existing audit.csv; cannot rebuild')
     rules=rulebook()
     evidence=description_evidence(out)
+    shirt_evidence=shirt_jersey_evidence(out)
     alias_review=out/'style_alias_validation.csv'
     with alias_review.open('w',newline='',encoding='utf-8-sig') as f:
         w=csv.DictWriter(f,fieldnames=REVIEW_FIELDS);w.writeheader();w.writerows(rules[2])
@@ -380,7 +405,7 @@ def rebuild(out,only_migrate=False):
                 mw.writeheader();others[name]=(fh,mw)
         try:
             for r in reader:
-                row=augment(r,rules,evidence)
+                row=augment(r,rules,evidence,shirt_evidence)
                 writer.writerow(row)
                 count['scanned']+=1
                 if row['shopify_status']=='SHOPIFY_VERIFIED':count['shopify_verified']+=1

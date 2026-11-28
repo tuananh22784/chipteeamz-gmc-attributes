@@ -77,6 +77,7 @@ jobs:
             out/material_sheet_sync_summary.json
             out/attribute_sheet_sync_summary.json
             out/attribute_auto_approval_evidence.csv
+            out/legacy_pattern_source_reconciliation.csv
             out/attribute_shopify_evidence.csv
             out/attribute_shopify_refetch_summary.json
             out/sheet_approved_attribute_rules.csv

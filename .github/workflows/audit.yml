@@ -78,9 +78,18 @@ jobs:
           else
             python engine.py audit-live --page-size "$PAGE_SIZE" --max-pages "$MAX_PAGES" --out out
           fi
+      - name: Refetch missing-style Hoodie Shopify descriptions (read only)
+        if: ${{ success() }}
+        env:
+          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+        run: python refresh_hoodie_descriptions.py --out out
       - name: Unified Fabric Master approval and report re-enrichment
         if: ${{ success() }}
         run: python unified_rules.py --out out
+      - name: Export remaining unknown styles
+        if: ${{ success() }}
+        run: python export_pending_styles.py --out out
       - name: Save snapshot for next run
         if: always() && hashFiles('out/checkpoint.json') != ''
         uses: actions/cache/save@v4

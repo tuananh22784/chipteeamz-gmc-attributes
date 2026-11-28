@@ -1,0 +1,65 @@
+name: GMC Recheck Existing Styles (No New Page)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gmc-v13-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  recheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Dependencies
+        run: pip install -r requirements.txt
+      - name: Tests
+        run: |
+          python -m py_compile engine.py live.py unified_rules.py refresh_hoodie_descriptions.py export_pending_styles.py
+          python -m unittest discover -s tests -q
+      - name: Restore existing audit and checkpoint
+        uses: actions/cache/restore@v4
+        with:
+          path: out/
+          key: gmc-v13-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            gmc-v13-${{ github.ref_name }}-
+      - name: Require existing 4500-item audit
+        run: |
+          test -s out/audit.csv
+          test -s out/checkpoint.json
+          python - <<'PY'
+          import csv,json
+          cp=json.load(open('out/checkpoint.json'))
+          with open('out/audit.csv',encoding='utf-8-sig',newline='') as f:
+              total=sum(1 for _ in csv.DictReader(f))
+          if total!=cp['scanned'] or total<4500:
+              raise SystemExit(f'Audit/checkpoint mismatch or too few rows: {total} vs {cp["scanned"]}')
+          print('Using existing audit:',total,'pages:',cp['pages'])
+          PY
+      - name: Fetch missing-style Hoodie descriptions from Shopify only
+        env:
+          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+        run: python refresh_hoodie_descriptions.py --out out
+      - name: Re-evaluate Material without changing checkpoint
+        run: |
+          python unified_rules.py --out out
+          python export_pending_styles.py --out out
+      - name: Save updated cache snapshot
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: out/
+          key: gmc-v13-${{ github.ref_name }}-${{ github.run_id }}
+      - name: Downloadable report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hoodie-polo-style-recheck-${{ github.run_id }}
+          path: out/
+          retention-days: 14

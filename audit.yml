@@ -1,0 +1,122 @@
+name: GMC Attributes V1.3.2 Unified Read-Only
+on:
+  workflow_dispatch:
+    inputs:
+      scan_mode:
+        description: 'new = restart V1.3 scan; resume = require saved checkpoint'
+        required: true
+        type: choice
+        options:
+          - new
+          - resume
+        default: new
+      page_size:
+        description: 'GMC page size; keep identical between resume runs'
+        required: true
+        default: '500'
+      max_pages:
+        description: 'Pages per run; start with 1 or 5'
+        required: true
+        default: '1'
+permissions:
+  contents: read
+concurrency:
+  group: gmc-v13-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Unit tests
+        run: |
+          python -m py_compile engine.py live.py material_rules.py unified_rules.py
+          python -m unittest discover -s tests -v
+      - name: Restore last V1.3 scan snapshot
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: out/
+          key: gmc-v13-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            gmc-v13-${{ github.ref_name }}-
+      - name: Validate resume mode
+        env:
+          SCAN_MODE: ${{ inputs.scan_mode }}
+        run: |
+          if [ "$SCAN_MODE" = "resume" ]; then
+            test -f out/checkpoint.json || { echo 'No V1.3 checkpoint restored; refusing to restart'; exit 1; }
+            test -f out/audit.csv || { echo 'No V1.3 audit.csv restored'; exit 1; }
+          fi
+      - name: Migrate cached reports to unified V1.3.2 schema
+        if: ${{ inputs.scan_mode == 'resume' }}
+        run: python unified_rules.py --out out
+      - name: Run GMC and Shopify read-only audit
+        env:
+          GMC_ACCOUNT_ID: ${{ secrets.GMC_ACCOUNT_ID }}
+          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/merchant-credentials.json
+          MERCHANT_SERVICE_ACCOUNT_JSON: ${{ secrets.MERCHANT_SERVICE_ACCOUNT_JSON }}
+          SCAN_MODE: ${{ inputs.scan_mode }}
+          PAGE_SIZE: ${{ inputs.page_size }}
+          MAX_PAGES: ${{ inputs.max_pages }}
+        run: |
+          set -euo pipefail
+          test -n "$MERCHANT_SERVICE_ACCOUNT_JSON"
+          printf '%s' "$MERCHANT_SERVICE_ACCOUNT_JSON" > merchant-credentials.json
+          chmod 600 merchant-credentials.json
+          trap 'rm -f merchant-credentials.json' EXIT
+          if [ "$SCAN_MODE" = "resume" ]; then
+            python engine.py audit-live --resume --page-size "$PAGE_SIZE" --max-pages "$MAX_PAGES" --out out
+          else
+            python engine.py audit-live --page-size "$PAGE_SIZE" --max-pages "$MAX_PAGES" --out out
+          fi
+      - name: Refetch missing-style Hoodie Shopify descriptions (read only)
+        if: ${{ success() }}
+        env:
+          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+        run: python refresh_hoodie_descriptions.py --out out
+      - name: Unified Fabric Master approval and report re-enrichment
+        if: ${{ success() }}
+        run: python unified_rules.py --out out
+      - name: Export remaining unknown styles
+        if: ${{ success() }}
+        run: python export_pending_styles.py --out out
+      - name: Apply staff-approved Google Sheets material (optional)
+        if: ${{ success() }}
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/merchant-credentials.json
+          MERCHANT_SERVICE_ACCOUNT_JSON: ${{ secrets.MERCHANT_SERVICE_ACCOUNT_JSON }}
+          MATERIAL_SHEET_ID: ${{ secrets.MATERIAL_SHEET_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MATERIAL_SHEET_ID:-}" ]; then
+            echo 'MATERIAL_SHEET_ID not configured; skip online material queue'
+            exit 0
+          fi
+          printf '%s' "$MERCHANT_SERVICE_ACCOUNT_JSON" > merchant-credentials.json
+          chmod 600 merchant-credentials.json
+          trap 'rm -f merchant-credentials.json' EXIT
+          python material_sheet_sync.py --out out
+      - name: Save snapshot for next run
+        if: always() && hashFiles('out/checkpoint.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: out/
+          key: gmc-v13-${{ github.ref_name }}-${{ github.run_id }}
+      - name: Upload audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmc-attributes-v1-3-${{ github.run_id }}
+          path: out/
+          if-no-files-found: warn
+          retention-days: 14

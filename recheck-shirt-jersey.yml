@@ -1,0 +1,83 @@
+name: GMC Recheck Shirt & Jersey (No New GMC Page)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gmc-v13-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  recheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install requirements
+        run: pip install -r requirements.txt
+      - name: Test classification and read-only pipeline
+        run: |
+          python -m py_compile live.py unified_rules.py refresh_shirt_jersey.py export_pending_styles.py
+          python -m unittest discover -s tests -q
+      - name: Restore latest existing audit (no new page)
+        uses: actions/cache/restore@v4
+        with:
+          path: out/
+          key: gmc-v13-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            gmc-v13-${{ github.ref_name }}-
+      - name: Verify checkpoint and audit agree
+        run: |
+          test -s out/audit.csv
+          test -s out/checkpoint.json
+          python - <<'PY'
+          import csv,json
+          checkpoint=json.load(open('out/checkpoint.json'))
+          with open('out/audit.csv',encoding='utf-8-sig',newline='') as handle:
+              rows=list(csv.DictReader(handle))
+          if len(rows)!=checkpoint['scanned'] or len(rows)<4500 or len({r['id'] for r in rows})!=len(rows):
+              raise SystemExit('Existing audit/checkpoint mismatch; abort without changing anything')
+          print('Audit',len(rows),'checkpoint pages',checkpoint['pages'])
+          PY
+      - name: Recheck only unresolved Shirt/Jersey against Shopify
+        env:
+          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+        run: python refresh_shirt_jersey.py --out out
+      - name: Rebuild read-only audit, keep same checkpoint
+        run: |
+          python unified_rules.py --out out
+          python export_pending_styles.py --out out
+      - name: Verify checkpoint unchanged and no fix eligibility
+        run: |
+          python - <<'PY'
+          import csv,json
+          cp=json.load(open('out/checkpoint.json'))
+          with open('out/audit.csv',encoding='utf-8-sig',newline='') as handle: rows=list(csv.DictReader(handle))
+          assert cp['scanned']==len(rows)
+          assert all(r['id'] for r in rows)
+          assert json.load(open('out/summary.json'))['auto_fix_eligible']==0
+          print('Read-only verification passed')
+          PY
+      - name: Save snapshot for future resume
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: out/
+          key: gmc-v13-${{ github.ref_name }}-${{ github.run_id }}
+      - name: Export review artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmc-shirt-jersey-refetch-${{ github.run_id }}
+          path: |
+            out/audit.csv
+            out/summary.json
+            out/missing_style_summary.json
+            out/missing_style_after_hoodie_polo.csv
+            out/shirt_jersey_style_evidence.csv
+            out/shirt_jersey_refetch_summary.json
+            out/material_mapping_summary.json
+          retention-days: 14

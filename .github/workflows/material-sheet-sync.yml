@@ -1,6 +1,15 @@
 name: GMC Attributes Employee Google Sheets Sync (Read Only)
 on:
   workflow_dispatch:
+    inputs:
+      refetch_batches:
+        description: 'Shopify refetch batches of up to 500 items each (no GMC scan)'
+        type: choice
+        default: '1'
+        options:
+          - '1'
+          - '2'
+          - '3'
   schedule:
     - cron: '25 7 * * *'
 permissions:
@@ -11,7 +20,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,11 +56,11 @@ jobs:
           assert len(rows)==cp['scanned']==len({r['id'] for r in rows})
           assert json.load(open('out/summary.json'))['auto_fix_eligible']==0
           PY
-      - name: Refetch verified Shopify Color and Pattern evidence (max 500 items)
+      - name: Refetch Shopify evidence in bounded batches (up to 1500 items)
         env:
           SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
-        run: python refetch_color_pattern.py --out out --limit 500
+        run: python run_refetch_batches.py --out out --batches "${{ inputs.refetch_batches || '1' }}" --batch-size 500
       - name: Sync confirmed Color and Pattern in same Google Sheet
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/merchant-credentials.json
@@ -80,6 +89,7 @@ jobs:
             out/legacy_pattern_source_reconciliation.csv
             out/attribute_shopify_evidence.csv
             out/attribute_shopify_refetch_summary.json
+            out/refetch_batch_progress.json
             out/sheet_approved_attribute_rules.csv
             out/sheet_approved_rules.csv
             out/audit.csv

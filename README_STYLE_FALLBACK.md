@@ -1,0 +1,7 @@
+# V1.3.2 Style Title Fallback — READ ONLY
+
+For verified Shopify variants with no explicit Style option, Material rule evaluation uses a conservative product-type match from the title stored in the GMC audit. Explicit Standard T-shirt / Women's T-shirt / Standard Long Sleeve / standard Sweatshirt can be mapped to user-supplied Material Master. A title merely saying `shirt`, `jersey`, or `hoodie` is NOT sufficient to choose fabric; unclear subtype remains REVIEW_MISSING_STYLE. Non-apparel titles are excluded.
+
+New columns: `style_resolution_source`, `style_resolution_status`, `style_resolution_evidence`, `style_resolved`. Existing Shopify variant style always takes precedence. Existing GMC material is never overwritten; no Merchant API writes. **No Shopify description full text was persisted in historical audit CSV**, so offline reprocessing of the 4,500 rows uses the stored GMC title (not independently fetched Shopify title or Description); future scans use fresh data but title style fallback remains conservative.
+
+For deployment: back up your out/ artifact and checkpoint. Merge the contents of this folder into your existing GitHub repository, preserving secrets, then use scan_mode=resume; the workflow rebuilds historical audit columns before appending. Test for no duplicates and stable checkpoint count. You can run re-enrichment offline by `python unified_rules.py --out <folder>` where `audit.csv` is present. Never run `new` to preserve the existing scan checkpoint.

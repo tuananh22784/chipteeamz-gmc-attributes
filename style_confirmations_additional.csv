@@ -1,0 +1,18 @@
+﻿row_number,variant_style,item_count,user_confirmation_from_screenshot,resolved_subtype,resolved_material,mapping_decision,note,example_item_id
+1,Short sleeve Quarter Zip with pocket,7,Có,Men's Short Sleeve Quarter Zip,100% polyester,MATCH_EXISTING_MASTER,,shopify_US_7296869367906_41730068480098
+2,Women Polo shirt with pocket,5,Có,Women Short sleeve polo shirt,100% polyester,MATCH_EXISTING_MASTER,,shopify_US_7322089029730_41823636848738
+3,Women Long Sleeve Jersey,4,"96% polyester, 4% spandex",Women Long Sleeve Cycling Jersey,"96% polyester, 4% spandex",NEW_STYLE_MATERIAL,,shopify_US_6774074671202_40026864975970
+4,Short sleeve Polo shirt with pocket,3,Có,Men Short sleeve polo shirt,100% polyester,MATCH_EXISTING_MASTER,,shopify_US_7461096554594_42325819588706
+5,Women,3,100% polyester,Women (only specified product),100% polyester,ITEM_SCOPED_ONLY,Do not create global alias from generic variant name,shopify_US_7493782798434_42453755658338
+6,Women Short Sleeve Jersey,3,"96% polyester, 4% spandex",Women Short Sleeve Cycling Jersey,"96% polyester, 4% spandex",NEW_STYLE_MATERIAL,,shopify_US_6769721933922_40007886176354
+7,Women's Short Sleeve Quarter-Zip with pocket,3,có,Women Quarter Zip,100% polyester,MATCH_EXISTING_MASTER,,shopify_US_7297003880546_41730617081954
+8,Kid Hawaiian Shirt,2,Có,Hawaiian Shirt,100% polyester,MATCH_EXISTING_MASTER,,shopify_US_7427257008226_42229231747170
+9,Men Short Sleeve Jersey,2,"96% polyester, 4% spandex",Men Short Sleeve Cycling Jersey,"96% polyester, 4% spandex",NEW_STYLE_MATERIAL,,shopify_US_6885933580386_40408046403682
+10,Female,1,Standard Crew Neck Sweatshirt,Standard Crew Neck Sweatshirt,,SUBTYPE_CONFIRMED_MATERIAL_PENDING,"User supplied subtype, not fabric composition; keep under review",shopify_US_6584942887010_39394465480802
+11,Hat BWB,1,100% polyester,Hat BWB,100% polyester,NEW_STYLE_MATERIAL,,shopify_US_6814035312738_40164839260258
+12,Kid,1,100% polyester,Kid (only specified product),100% polyester,ITEM_SCOPED_ONLY,Do not create global alias from generic variant name,shopify_US_7491031793762_42435647701090
+13,Kids' Long Sleeve UPF,1,có,Kid Long Sleeve UPF,100% polyester,MATCH_EXISTING_MASTER,,shopify_US_7484082290786_42394121764962
+14,Unisex Premium T-shirt,1,"Solid Colors: 100% cotton; Ash Grey: 99% cotton, 1% polyester; Heather Grey: 90% cotton, 10% polyester; Heather Colors: 52% cotton, 48% polyester",Unisex Premium T-shirt,COLOR_DEPENDENT,COLOR_DEPENDENT,Require color option for the exact variant,shopify_US_7338701258850_42224604774498
+15,Women’s Short Sleeve Polo With Pocket,1,có,Women Short sleeve polo shirt,100% polyester,MATCH_EXISTING_MASTER,,shopify_US_7799556374626_43325843570786
+16,Women’s Short Sleeve Quarter-Zip With Pocket,1,có,Women Quarter Zip,100% polyester,MATCH_EXISTING_MASTER,,shopify_US_7724631064674_43016660287586
+17,Zip - Up Hoodie,1,có,220g air layer Zip up Hoodie,100% polyester,MATCH_EXISTING_MASTER,,shopify_US_10363960623202_50856355987554

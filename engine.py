@@ -60,7 +60,8 @@ COLUMNS = ['id','language','feed_label','title','variant_options','variant_style
            'proposed_color','color_evidence','proposed_pattern','pattern_evidence',
            'proposed_material','material_evidence','color_qa','pattern_qa','material_qa','approved_color','approved_pattern','approved_material','qa_status','review_reason',
            'material_rule_id','material_source','material_matched_subtype','material_decision',
-           'material_reason','material_component_1','material_component_2']
+           'material_reason','material_component_1','material_component_2',
+           'style_resolution_source','style_resolution_status','style_resolution_evidence','style_resolved']
 
 def color_mentions(s):
     found, taken = [], []

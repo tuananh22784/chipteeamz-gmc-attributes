@@ -139,6 +139,32 @@ class GoogleSheets:
         needed={'Pending_Material','Approved_Rules','History'}
         if not needed.issubset(titles):raise ValueError('Missing spreadsheet tabs: '+str(sorted(needed-titles)))
 
+def append_rows(sheet,tab,rows,fields):
+    if rows:
+        sheet.call('POST','/values/'+tab+'!A1:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS',
+                   json={'values':[[str(r.get(k,'')) for k in fields] for r in rows]})
+
+def reconcile_material_pending(sheet,snapshot,desired):
+    """Preserve staff edits. Delete handled rows only after verifying a fresh snapshot."""
+    tab='Pending_Material'
+    latest=sheet.get_tab(tab,PENDING_FIELDS)
+    if latest!=snapshot:raise RuntimeError('CONCURRENT_SHEET_CHANGE: Pending_Material; retry')
+    keys=[r['item_id'] for r in snapshot]
+    if len(keys)!=len(set(keys)):raise ValueError('DUPLICATE_PENDING_MATERIAL')
+    target={r['item_id'] for r in desired}
+    removals=[i+1 for i,r in enumerate(snapshot) if r['item_id'] not in target]
+    additions=[r for r in desired if r['item_id'] not in set(keys)]
+    append_rows(sheet,tab,additions,PENDING_FIELDS)
+    if removals:
+        actual=sheet.get_tab(tab,PENDING_FIELDS)
+        if actual[:len(snapshot)]!=snapshot:
+            raise RuntimeError('CONCURRENT_SHEET_CHANGE_AFTER_APPEND: Pending_Material; refusing to delete')
+        sheets=sheet.call('GET','?fields=sheets.properties(sheetId,title)')['sheets']
+        sid=next(x['properties']['sheetId'] for x in sheets if x['properties']['title']==tab)
+        sheet.call('POST',':batchUpdate',json={'requests':[
+            {'deleteDimension':{'range':{'sheetId':sid,'dimension':'ROWS','startIndex':i,'endIndex':i+1}}}
+            for i in sorted(removals,reverse=True)]})
+
 def sync(out,spreadsheet_id=None,local_only=False):
     out=Path(out); audit=out/'audit.csv'; assert audit.exists(),audit
     if local_only:
@@ -173,8 +199,10 @@ def sync(out,spreadsheet_id=None,local_only=False):
         export_csv(out/'Approved_Rules.csv',rules,RULE_FIELDS)
         export_csv(out/'History.csv',hist,HISTORY_FIELDS)
     else:
-        sheet.set_tab('Approved_Rules',rules,RULE_FIELDS)
-        sheet.set_tab('History',hist,HISTORY_FIELDS)
+        if sheet.get_tab('Approved_Rules',RULE_FIELDS)!=approved or sheet.get_tab('History',HISTORY_FIELDS)!=history:
+            raise RuntimeError('CONCURRENT_RULE_CHANGE: Material sync; retry safely')
+        append_rows(sheet,'Approved_Rules',rules[len(approved):],RULE_FIELDS)
+        append_rows(sheet,'History',hist[len(history):],HISTORY_FIELDS)
     # Export rules snapshot for unified audit; rules survive GitHub cache expiry in Sheets.
     export_csv(out/'sheet_approved_rules.csv',rules,RULE_FIELDS)
     # Rebuild existing audit using the persistent staff rules before generating pending.
@@ -182,7 +210,7 @@ def sync(out,spreadsheet_id=None,local_only=False):
     rebuild(out)
     new_pending=build_pending(audit,remaining,rules)
     if local_only:export_csv(out/'Pending_Material.csv',new_pending,PENDING_FIELDS)
-    else:sheet.set_tab('Pending_Material',new_pending,PENDING_FIELDS)
+    else:reconcile_material_pending(sheet,pending,new_pending)
     report={'pending_before':len(pending),'approved_rules':len(rules),'new_rules':len(rules)-len(approved),
             'pending_after':len(new_pending),'status':stats,'gmc_write':False}
     (out/'material_sheet_sync_summary.json').write_text(json.dumps(report,indent=2),encoding='utf-8')

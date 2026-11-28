@@ -64,6 +64,57 @@ def candidate(row,attribute,evidence=None):
         if suggested:return suggested,ev,'SHOPIFY_DESCRIPTION_REVIEW'
     return '',('Checked Shopify product and description' if source else 'Audit only; Shopify description refetch required'),('SHOPIFY_CHECKED_NO_MATCH' if source else 'REFETCH_REQUIRED')
 
+def explicit_pattern_description(description):
+    """Only product-specific explicitly labeled pattern, not incidental motifs.
+
+    Single-line pattern fields are authoritative; broad marketing text is not.
+    """
+    d=plain(description)
+    matches=[]
+    for m in re.finditer(r'(?i)(?:^|[.;])\s*(?:fabric\s+)?(?:design\s+)?pattern\s*[:=-]\s*([^.;]{1,90})',d):
+        names=[name for name,rx in PATTERNS.items() if re.search(rx,m.group(1),re.I)]
+        if len(names)==1:matches.append(names[0])
+    unique=list(dict.fromkeys(matches))
+    return unique[0] if len(unique)==1 else ''
+
+def explicit_pattern_title(title):
+    """Only a unique pattern explicitly named as pattern/print in Shopify title."""
+    t=plain(title)
+    matches=[]
+    for name,rx in PATTERNS.items():
+        if re.search(r'(?i)(?:'+rx+r')\s+(?:pattern|print)\b',t) or re.search(r'(?i)\b(?:pattern|print)\s*(?::|-)?\s*(?:'+rx+r')',t):
+            matches.append(name)
+    return matches[0] if len(matches)==1 else ''
+
+def strict_auto_candidates(rows,evidence):
+    """Auto approve only explicit garment color or explicitly labeled pattern.
+    Check source IDs and avoid overwriting existing values.
+    """
+    result={'COLOR':0,'PATTERN':0}
+    for r in rows:
+        e=evidence.get(r['id'],{})
+        if r.get('shopify_status')!='SHOPIFY_VERIFIED' or e.get('evidence_status')!='VERIFIED':continue
+        if str(e.get('product_id'))!=str(r.get('shopify_product_id')) or str(e.get('variant_id'))!=str(r.get('shopify_variant_id')):continue
+        desc=e.get('description','')
+        if is_missing(r,'COLOR'):
+            value=explicit_color_description(desc)
+            if value and SAFE_COLOR.fullmatch(value) and norm(value) not in AMBIGUOUS:
+                r['approved_color']=value;r['proposed_color']=value
+                r['color_qa']='COLOR_EXPLICIT_DESCRIPTION_VERIFIED'
+                r['color_evidence']='SHOPIFY_DESCRIPTION_EXPLICIT_GARMENT_COLOR'
+                clear_stale_reason(r,'COLOR');result['COLOR']+=1
+        if is_missing(r,'PATTERN'):
+            from_desc=explicit_pattern_description(desc)
+            from_title=explicit_pattern_title(e.get('shopify_title',''))
+            value=from_title or from_desc
+            if from_title and from_desc and from_title!=from_desc:value=''
+            if value and SAFE_PATTERN.fullmatch(value):
+                r['approved_pattern']=value;r['proposed_pattern']=value
+                r['pattern_qa']='PATTERN_EXPLICIT_DESCRIPTION_VERIFIED'
+                r['pattern_evidence']='SHOPIFY_TITLE_EXPLICIT_PATTERN' if from_title else 'SHOPIFY_DESCRIPTION_EXPLICIT_PATTERN_FIELD'
+                clear_stale_reason(r,'PATTERN');result['PATTERN']+=1
+    return result
+
 def evidence_map(out):
     path=Path(out)/'attribute_shopify_evidence.csv'
     return {r['item_id']:r for r in load_csv(path)} if path.exists() else {}
@@ -170,7 +221,7 @@ def auto_apply_verified_color(rows,evidence):
     for row in rows:
         if row.get('shopify_status')!='SHOPIFY_VERIFIED' or not is_missing(row,'COLOR'):continue
         e=evidence.get(row['id'],{})
-        if e.get('evidence_status')!='VERIFIED':continue
+        if e.get('evidence_status')!='VERIFIED' or str(e.get('product_id'))!=str(row.get('shopify_product_id')) or str(e.get('variant_id'))!=str(row.get('shopify_variant_id')):continue
         color=(e.get('selected_color') or '').strip()
         if not color or norm(color) in AMBIGUOUS or len(color)>70 or not SAFE_COLOR.fullmatch(color):continue
         # Only a verified exact Shopify variant Color option; preserve shade spelling.
@@ -205,6 +256,40 @@ def save_audit(out,rows):
             subset=[r for r in rows if (any(r.get('approved_'+a) for a in ('color','pattern','material')))==(tab!='needs_review')]
             export_csv(p,subset,fields)
 
+def append_only(sheet,tab,rows,fields):
+    if not rows:return
+    sheet.call('POST','/values/'+tab+'!A1:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS',
+               json={'values':[[str(r.get(k,'')) for k in fields] for r in rows]})
+
+def reconcile_pending(sheet,tab,snapshot,desired,fields):
+    """Non-destructive reconcile. Refuse stale snapshots instead of clearing sheet.
+
+    Existing rows remain unchanged, including all concurrent staff-entered values.
+    Deletes only rows that became approved, after exact preflight re-read.
+    This is optimistic validation, not a cross-API atomic transaction.
+    """
+    latest=sheet.get_tab(tab,fields)
+    if latest!=snapshot:
+        raise RuntimeError('CONCURRENT_SHEET_CHANGE: '+tab+' changed since read; retry later. No pending rows changed.')
+    def identity(r):
+        return key_of(r)
+    expected={identity(r):r for r in desired}
+    old_keys=[identity(r) for r in snapshot]
+    if len(set(old_keys))!=len(old_keys):raise ValueError('DUPLICATE_PENDING_KEYS '+tab)
+    removal=[i+1 for i,r in enumerate(snapshot) if identity(r) not in expected] # row 1-index excluding header
+    additions=[r for r in desired if identity(r) not in set(old_keys)]
+    # Append first: a failure cannot lose unhandled work. Duplicates are prevented on next retry.
+    append_only(sheet,tab,additions,fields)
+    if removal:
+        # Protect against employee changes between append and removal.
+        actual=sheet.get_tab(tab,fields)
+        if actual[:len(snapshot)]!=snapshot:
+            raise RuntimeError('CONCURRENT_SHEET_CHANGE_AFTER_APPEND: '+tab+'; not deleting pending rows')
+        meta=sheet.call('GET','?fields=sheets.properties(sheetId,title)')
+        sid=next(x['properties']['sheetId'] for x in meta['sheets'] if x['properties']['title']==tab)
+        requests=[{'deleteDimension':{'range':{'sheetId':sid,'dimension':'ROWS','startIndex':i,'endIndex':i+1}}} for i in sorted(removal,reverse=True)]
+        sheet.call('POST',':batchUpdate',json={'requests':requests})
+
 def init_tabs(sheet):
     d=sheet.call('GET','?fields=sheets.properties.title')
     have={x['properties']['title'] for x in d.get('sheets',[])}
@@ -228,27 +313,46 @@ def sync(out,sheet_id=None,local=False):
         def read(name):return sheet.get_tab(name,PENDING_FIELDS if name.startswith('Pending_') else RULE_FIELDS if name==TAB_RULES else HISTORY_FIELDS)
         def write(name,vals,cols):sheet.set_tab(name,vals,cols)
     rules=read(TAB_RULES);hist=read(TAB_HISTORY)
-    rest={};stats={};all_new=[]
+    original_rules=list(rules);original_hist=list(hist)
+    rest={};snapshots={};stats={};all_new=[]
     for a in ATTRIBUTES:
         tab=TAB_PENDING[a]
         old=read(tab)
+        snapshots[a]=old
         # Validate IDs against immutable source before writing any rule.
         for p in old:
             if p.get('item_id') not in by_id:raise ValueError('Unknown pending item ID: '+p.get('item_id',''))
         tail,rules,hist,count=ingest(old,rules,hist,by_id)
         rest[a]=tail;stats[a]={'pending_before':len(old),**count}
     # Persist rules and history before removing pending rows. Retry idempotently.
-    write(TAB_RULES,rules,RULE_FIELDS);write(TAB_HISTORY,hist,HISTORY_FIELDS)
+    if local:
+        write(TAB_RULES,rules,RULE_FIELDS);write(TAB_HISTORY,hist,HISTORY_FIELDS)
+    else:
+        # Append-only durable approvals. Reject concurrent approvals before append.
+        if sheet.get_tab(TAB_RULES,RULE_FIELDS)!=original_rules or sheet.get_tab(TAB_HISTORY,HISTORY_FIELDS)!=original_hist:
+            raise RuntimeError('CONCURRENT_RULE_CHANGE: retry sync; no overwrites')
+        append_only(sheet,TAB_RULES,rules[len(original_rules):],RULE_FIELDS)
+        append_only(sheet,TAB_HISTORY,hist[len(original_hist):],HISTORY_FIELDS)
+
     export_csv(out/'sheet_approved_attribute_rules.csv',rules,RULE_FIELDS)
     evidence=evidence_map(out)
+    prior={(r['id'],a):r.get('approved_'+a,'') for r in rows for a in ('color','pattern')}
     auto_count=auto_apply_verified_color(rows,evidence)
+    strict_count=strict_auto_candidates(rows,evidence)
     new_count=apply_rules(rows,rules)
+    changes=[{'item_id':r['id'],'attribute':a.upper(),'previous':prior[(r['id'],a)],
+              'new_value':r.get('approved_'+a,''),'qa_status':r.get(a+'_qa',''),'evidence':r.get(a+'_evidence','')}
+             for r in rows for a in ('color','pattern')
+             if not prior[(r['id'],a)] and r.get('approved_'+a)]
+    export_csv(out/'attribute_auto_approval_evidence.csv',changes,
+               ['item_id','attribute','previous','new_value','qa_status','evidence'])
     save_audit(out,rows);recompute_summaries(out,rows)
     for a in ATTRIBUTES:
         newly=build_pending(rows,a,rest[a],rules,evidence)
-        write(TAB_PENDING[a],newly,PENDING_FIELDS)
+        if local:write(TAB_PENDING[a],newly,PENDING_FIELDS)
+        else:reconcile_pending(sheet,TAB_PENDING[a],snapshots[a],newly,PENDING_FIELDS)
         stats[a]['pending_after']=len(newly)
-    stats.update({'rules_total':len(rules),'applied_staff_updates':new_count,'auto_verified_variant_colors':auto_count,'evidence_cached':len(evidence),
+    stats.update({'rules_total':len(rules),'applied_staff_updates':new_count,'auto_verified_variant_colors':auto_count,'auto_verified_explicit_description':strict_count,'evidence_cached':len(evidence),'newly_approved_attributes':len(changes),
                   'still_waiting_shopify_check':{a:sum(is_missing(r,a) and r.get('shopify_status')=='SHOPIFY_VERIFIED' and r['id'] not in evidence for r in rows) for a in ATTRIBUTES},'gmc_write':False})
     (out/'attribute_sheet_sync_summary.json').write_text(json.dumps(stats,indent=2),encoding='utf-8')
     return stats
